@@ -41,7 +41,8 @@ foreach (PublishedQuarter q in await qc.Data.GetQuartersAsync())
 
 ## Readers
 
-Each reader streams one quarter, one row group at a time, so memory does not grow with the quarter.
+Each reader streams one quarter, one row group at a time, so memory does not grow with the quarter: a
+stream of a quarter's account values holds about 80 MB.
 
 | Method | Rows |
 |---|---|
@@ -108,8 +109,9 @@ index of every filing the host holds.
 
 Every file is checked against the length and SHA-256 digest in the host's manifest before it is read or
 written. A file that does not match is fetched again from a fresh manifest, three attempts in all.
-`DataIntegrityException` means all three failed, or the manifest could not be read. Most often the quarter
-is being republished: try again later.
+`DataIntegrityException` means all three failed. Most often the quarter is being republished: try again
+later. It also comes at once, with no retry, when the manifest is not in its published form, or names a
+digest, a length or a path that cannot be used.
 
 ## Missing values
 
@@ -150,6 +152,10 @@ package's, so the two can share one directory.
 
 Without a cache, a download is kept in the temporary directory only while it is read.
 
+A process killed during a download, or a delete the system refuses, can leave a `quartercall-*.parquet`
+in the temporary directory, or a `*.tmp` in the cache or beside a file being saved. Either is safe to
+delete.
+
 ## Options
 
 `QuarterCallOptions` has three settings: `DataBaseAddress` (default `https://data.quartercall.com/`),
@@ -178,7 +184,11 @@ Three exceptions, each a `QuarterCallException`, so catching the base catches an
 | `DataIntegrityException` | What the host published does not match its description. |
 | `UnsupportedSchemaException` | The host publishes a form this version does not read. Upgrade the package. |
 
-Network failures are `HttpRequestException`; cancellation is `OperationCanceledException`.
+Network failures are `HttpRequestException`; cancellation is `OperationCanceledException`. The disk's
+failures, in writing a file in the cache, the temporary directory or a download's path, or in opening it
+there, are `IOException` and `UnauthorizedAccessException`. A file that fails to read from disk once
+open is an `UnsupportedSchemaException`: the reader cannot tell a failing disk from a form it does not
+read.
 
 ## Not in this release
 

@@ -13,7 +13,7 @@
     <RepositoryUrl>https://github.com/QuarterCall/quartercall-csharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageTags>credit union;NCUA;call report;5300</PackageTags>
+    <PackageTags>credit-union;NCUA;call-report;5300</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
