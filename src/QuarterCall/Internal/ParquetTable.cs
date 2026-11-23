@@ -15,9 +15,9 @@ namespace QuarterCall.Internal;
 /// Its columns are the file's top-level columns of one value a row; a nested or repeated column is not one of them.
 /// Each column is read in the form its declaration calls for: a column the file declares optional through
 /// Parquet.Net's nullable form, and one it declares required through its plain form. Any failure of Parquet.Net but a
-/// cancellation is an <see cref="UnsupportedSchemaException"/>
-/// with Parquet.Net's exception inside: the file matched the manifest, so a file that cannot be read is in a form
-/// this version of the package does not read.
+/// cancellation or a want of memory is an <see cref="UnsupportedSchemaException"/> with Parquet.Net's exception
+/// inside: the file matched the manifest, so a file that cannot be read is in a form this version of the package
+/// does not read.
 /// </remarks>
 internal sealed class ParquetTable : IAsyncDisposable
 {
@@ -222,8 +222,8 @@ internal sealed class ParquetTable : IAsyncDisposable
     // Reads a column the file declares required through Parquet.Net's plain form, into an array rented for the read,
     // and copies it into values. Parquet.Net's nullable form must not read such a column: it takes each row's
     // definition level from an array it rents and does not clear, and a required column has no levels to write there,
-    // so a row whose slot holds a negative number an earlier user left is read as null, and every value after it moves
-    // up a row. A process's first reads find clean arrays; later ones need not.
+    // so a row whose slot holds a negative number is read as null, and each value after it lands one row later, the
+    // last one lost. The array holds whatever was there before, so the same read can be right once and wrong next.
     private static async Task ReadRequiredAsync<T>(
         ParquetRowGroupReader group, DataField field, Memory<T?> values, CancellationToken ct)
         where T : struct

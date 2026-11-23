@@ -6,8 +6,8 @@ namespace QuarterCall;
 /// One credit union's profile for one filing: a row of a quarter's profiles file, as
 /// <see cref="DataClient.ReadProfilesAsync"/> reads it. The file's first eight columns are properties; the regulator's
 /// own columns, about 179 of them, are read by name with <see cref="GetString"/> and <see cref="GetInt32"/>, or with
-/// <see cref="GetValue"/> whatever they hold, so a column the regulator adds is readable without a new version of the
-/// package. A caller cannot make one.
+/// <see cref="GetValue"/> for either kind, so a text or integer column the regulator adds is readable without a new
+/// version of the package. A caller cannot make one.
 /// </summary>
 public sealed class FilingProfile
 {

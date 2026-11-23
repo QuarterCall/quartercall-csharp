@@ -76,8 +76,8 @@ public sealed class AccountsTests : IDisposable
     [Fact]
     public async Task ReadsTheRowsAsWrittenOnEveryRead()
     {
-        // Four row groups of a size a published file has, its required columns declared as the published file
-        // declares them, read again and again in one process, as an analyst's session reads a quarter.
+        // Four row groups of 22,060 rows, large enough to show a misread, the required columns declared as the
+        // published file declares them, read again and again in one process, as an analyst's session reads a quarter.
         const int codes = 1103;
         const int charters = 80;
         var rows = ManyRows(charters, codes);

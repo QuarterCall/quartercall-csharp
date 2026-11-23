@@ -208,8 +208,8 @@ public sealed class TextAndProfilesTests : IDisposable
     [Fact]
     public async Task ReadsTheProfilesAsWrittenOnEveryRead()
     {
-        // Three row groups of a size an accounts file has, quarter declared required as the published file declares
-        // it, read again and again in one process, with and without a filter.
+        // Three row groups of 22,060 rows, quarter declared required, which the published file does not do but a
+        // file may, read again and again in one process, with and without a filter.
         const int count = 66_180;
         var rows = Enumerable.Range(1, count).Select(ManyProfiles).ToArray();
         var host = PublishProfiles(EvidenceFiles.Profiles(rows, Ncua, rowsPerGroup: count / 3));
