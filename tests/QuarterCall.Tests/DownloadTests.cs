@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Net;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using QuarterCall.Internal;
@@ -231,25 +231,30 @@ public sealed class DownloadTests : IDisposable
         var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
         var fileUri = new Uri(host.BaseAddress, file);
         using var cancel = new CancellationTokenSource();
-        var sinceCancelled = new Stopwatch();
-        // The body ends short, and the caller cancels as it ends: the client is then waiting to read again.
-        host.OnRequest = request => request.RequestUri == fileUri
-            ? Serve(new CutShortStream(body[..1000], Cut.End, () =>
+        var served = 0;
+        // Every body ends short. The first attempt fails plainly. As the second's body ends, the caller cancels
+        // 100 ms later: inside the 500 ms wait before a third attempt.
+        host.OnRequest = request =>
+        {
+            if (request.RequestUri != fileUri)
             {
-                cancel.Cancel();
-                sinceCancelled.Start();
-            }))
-            : null;
+                return null;
+            }
+
+            var second = Interlocked.Increment(ref served) == 2;
+            Action? atCut = second ? () => cancel.CancelAfter(TimeSpan.FromMilliseconds(100)) : null;
+            return Serve(new CutShortStream(body[..1000], Cut.End, atCut));
+        };
         using var client = host.CreateClient();
         var path = Destination();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path, cancel.Token));
-        sinceCancelled.Stop();
+        var download = client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path, cancel.Token);
 
-        // Well within the 250 ms wait, which the cancellation cut short; and no second attempt began.
-        Assert.InRange(sinceCancelled.Elapsed, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
-        Assert.Equal(new[] { ManifestUri(host), fileUri }, host.Requests.Select(r => r.Uri));
+        // A wait that never ended would fail here, after LongWait, rather than hang.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download.WaitAsync(LongWait));
+        // No third attempt began: a wait that ran out in spite of the cancellation would read the manifest again.
+        var manifest = ManifestUri(host);
+        Assert.Equal(new[] { manifest, fileUri, manifest, fileUri }, host.Requests.Select(r => r.Uri));
         Assert.Empty(Directory.GetFileSystemEntries(Path.GetDirectoryName(path)!));
     }
 
@@ -275,15 +280,10 @@ public sealed class DownloadTests : IDisposable
         Assert.Equal(new[] { "kept" }, FileNames(path));
     }
 
-    [Fact]
+    [UnixPermissionsFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task KeepsTheCancellationWhenCleanupFails()
     {
-        // Only Unix has a directory mode that forbids deleting a file in it.
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var host = new FixtureHost();
         var body = Body(200_000);
         var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
@@ -304,6 +304,9 @@ public sealed class DownloadTests : IDisposable
 
             // The temporary file cannot be deleted now; the caller still learns of the cancellation.
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+            // And the delete did fail: the temporary file is still there.
+            var left = Assert.Single(Directory.GetFiles(directory));
+            Assert.EndsWith(".tmp", left);
         }
         finally
         {
@@ -554,6 +557,42 @@ public sealed class DownloadTests : IDisposable
 
         Assert.Equal(2, host.Requests.Count(r => r.Uri == new Uri(host.BaseAddress, file)));
         Assert.Equal(body, await File.ReadAllBytesAsync(path));
+        Assert.Equal(body, await File.ReadAllBytesAsync(cached));
+        Assert.Equal(new[] { Digest(body) + ".parquet" }, FileNames(cache));
+    }
+
+    [UnixPermissionsFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task ReplacesACachedFileThatCannotBeOpened()
+    {
+        var host = new FixtureHost();
+        var body = Body(5000);
+        var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var fileUri = new Uri(host.BaseAddress, file);
+        var cache = Path.Combine(_root, "cache");
+        using var client = host.CreateClient(cache);
+        await client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, Destination("first.parquet"));
+        var cached = Path.Combine(cache, Digest(body) + ".parquet");
+        File.SetUnixFileMode(cached, UnixFileMode.None);
+        var path = Destination("second.parquet");
+
+        await client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path);
+
+        Assert.Equal(2, host.Requests.Count(r => r.Uri == fileUri));
+        Assert.Equal(body, await File.ReadAllBytesAsync(path));
+        Assert.Equal(body, await File.ReadAllBytesAsync(cached));
+
+        // A read through the cache agrees.
+        File.SetUnixFileMode(cached, UnixFileMode.None);
+        var hostClient = Host(host);
+        var evidence = new EvidenceResolver(
+            new ManifestReader(hostClient), new VerifiedFileStore(hostClient, cache), hostClient);
+
+        var opened = await evidence.OpenAsync(Q2026Q3, EvidenceTable.Accounts, CancellationToken.None);
+
+        Assert.NotNull(opened);
+        await opened.DisposeAsync();
+        Assert.Equal(3, host.Requests.Count(r => r.Uri == fileUri));
         Assert.Equal(body, await File.ReadAllBytesAsync(cached));
         Assert.Equal(new[] { Digest(body) + ".parquet" }, FileNames(cache));
     }

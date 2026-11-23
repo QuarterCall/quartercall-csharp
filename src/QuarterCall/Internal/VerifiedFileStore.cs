@@ -51,8 +51,9 @@ internal sealed class VerifiedFileStore
     }
 
     /// <summary>
-    /// A verified copy of <paramref name="file"/> to read: the cached one when it still matches, or else one just
-    /// downloaded, into the cache when there is one and into the system's temporary directory when not.
+    /// A verified copy of <paramref name="file"/> to read: the cached one when it can be read and still matches, or
+    /// else one just downloaded, into the cache when there is one and into the system's temporary directory when
+    /// not.
     /// </summary>
     /// <exception cref="DataIntegrityException">
     /// The download does not match <paramref name="file"/>: its length or its digest differs, or it broke off. The
@@ -87,10 +88,12 @@ internal sealed class VerifiedFileStore
     /// Saves a verified copy of <paramref name="file"/> at <paramref name="path"/>, creating its directory if
     /// missing. A file already there is replaced only by one that matches. A copy from the cache is hashed as it is
     /// copied, so the bytes placed at <paramref name="path"/> are always the bytes verified, and the cached file is
-    /// read once.
+    /// read once. A cached file that cannot be opened or read, or does not match, is fetched again and replaced, as
+    /// for <see cref="FetchAsync"/>.
     /// </summary>
     /// <exception cref="DataIntegrityException">
-    /// The download does not match <paramref name="file"/>, as for <see cref="FetchAsync"/>.
+    /// The download does not match <paramref name="file"/>, as for <see cref="FetchAsync"/>; or the copy just placed
+    /// in the cache could not be read back whole. Both may be retried.
     /// </exception>
     /// <exception cref="HttpRequestException">The host answered with a status that is not success.</exception>
     /// <exception cref="TaskCanceledException">
@@ -109,18 +112,19 @@ internal sealed class VerifiedFileStore
         }
 
         var cached = CachePath(_cacheDirectory, file);
-        try
+        if (await CopyCachedAsync(cached, target, file, ct).ConfigureAwait(false))
         {
-            await CopyOverAsync(cached, target, file, ct).ConfigureAwait(false);
             return;
         }
-        catch (Exception e) when (e is DataIntegrityException or FileNotFoundException)
-        {
-            // No copy in the cache, or one that does not match: it is fetched again and replaced.
-        }
 
+        // No usable copy in the cache: it is fetched again and replaced, then copied as before.
         await DownloadOverAsync(file, cached, ct).ConfigureAwait(false);
-        await CopyOverAsync(cached, target, file, ct).ConfigureAwait(false);
+        if (!await CopyCachedAsync(cached, target, file, ct).ConfigureAwait(false))
+        {
+            throw new DataIntegrityException(
+                $"The copy of {file.Uri} just placed in the cache, at {cached}, could not be read back whole. "
+                + "Another process may be changing the cache; try again shortly.");
+        }
     }
 
     // The cache's file for file, named by its digest. The cache directory is created if missing.
@@ -145,30 +149,45 @@ internal sealed class VerifiedFileStore
         return $"{target}.{Guid.NewGuid():N}{TemporaryExtension}";
     }
 
-    // Whether the file at path is there and matches: its length first, and then its digest. A file that cannot be
-    // opened, or is not there, does not match.
-    private static async Task<bool> IsWholeAsync(string path, FileRef file, CancellationToken ct)
+    // Whether the file at path is there, can be read, and matches file.
+    private static Task<bool> IsWholeAsync(string path, FileRef file, CancellationToken ct)
     {
-        FileStream stream;
+        return CopyIfWholeAsync(path, Stream.Null, file, ct);
+    }
+
+    // Reads the file at path once, into output, hashing it as it goes. False when it is not there, cannot be opened
+    // or read, or does not match file: in every such case the caller fetches the file again. A cancellation is
+    // thrown, never taken for a file that is not whole; so is a failure to write output.
+    private static async Task<bool> CopyIfWholeAsync(string path, Stream output, FileRef file, CancellationToken ct)
+    {
+        FileStream input;
         try
         {
-            stream = VerifiedFile.OpenShared(path);
+            input = VerifiedFile.OpenShared(path);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return false;
         }
 
-        await using (stream.ConfigureAwait(false))
+        await using (input.ConfigureAwait(false))
         {
-            if (stream.Length != file.Bytes)
+            // A length that differs needs no reading.
+            if (input.Length != file.Bytes)
             {
                 return false;
             }
 
-            var digest = new byte[SHA256.HashSizeInBytes];
-            await SHA256.HashDataAsync(stream, digest, ct).ConfigureAwait(false);
-            return file.HasDigest(digest);
+            try
+            {
+                await CopyVerifiedAsync(input, output, file, ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (DataIntegrityException)
+            {
+                // Its digest differs, or reading it failed part way.
+                return false;
+            }
         }
     }
 
@@ -204,35 +223,40 @@ internal sealed class VerifiedFileStore
         }
     }
 
-    // Copies source to a temporary file beside target in one pass, hashing it as it goes, and moves the copy over
-    // target once it matches. FileNotFoundException when source is not there.
-    private static async Task CopyOverAsync(string source, string target, FileRef file, CancellationToken ct)
+    // Copies the cached file to a temporary file beside target, hashing it as it goes, and moves the copy over
+    // target once it matches. False, with target untouched, when the cached file is not whole.
+    private static async Task<bool> CopyCachedAsync(string cached, string target, FileRef file, CancellationToken ct)
     {
-        var input = VerifiedFile.OpenShared(source);
         var temporary = Beside(target);
-        await using (input.ConfigureAwait(false))
+        bool whole;
+        try
         {
-            try
+            var output = CreateNew(temporary);
+            await using (output.ConfigureAwait(false))
             {
-                var output = CreateNew(temporary);
-                await using (output.ConfigureAwait(false))
-                {
-                    await CopyVerifiedAsync(input, output, file, ct).ConfigureAwait(false);
-                }
+                whole = await CopyIfWholeAsync(cached, output, file, ct).ConfigureAwait(false);
             }
-            catch
-            {
-                DeleteQuietly(temporary);
-                throw;
-            }
+        }
+        catch
+        {
+            DeleteQuietly(temporary);
+            throw;
+        }
+
+        if (!whole)
+        {
+            DeleteQuietly(temporary);
+            return false;
         }
 
         await PlaceAsync(temporary, target, file, ct).ConfigureAwait(false);
+        return true;
     }
 
-    // Deletes a temporary file while another exception is on its way out. Should the delete fail, the file is left
-    // behind, and that is tolerated: throwing here would replace the exception in flight, hiding why the work
-    // failed, and would turn a mismatch, which is retried, into an IOException, which is not.
+    // Deletes a temporary file the work no longer needs: one a failure leaves while its exception is on the way out,
+    // or a copy from the cache that did not match. Should the delete fail, the file is left behind, and that is
+    // tolerated: throwing here would replace the exception in flight, hiding why the work failed, and would turn a
+    // mismatch, which is retried, into an IOException, which is not.
     private static void DeleteQuietly(string path)
     {
         try

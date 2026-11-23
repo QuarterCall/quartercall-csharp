@@ -28,16 +28,29 @@ public sealed class QuarterCallClient : IDisposable
     /// <param name="options">Where to read from, and how long to wait.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The data base address is not an absolute http or https address, or the cache directory is empty or blank.
+    /// The data base address is not an absolute http or https address, or the cache directory is empty, blank or not
+    /// a valid path.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The timeout is neither more than zero and at most 24 days, nor infinite.
     /// </exception>
     public QuarterCallClient(QuarterCallOptions options)
     {
-        Validate(options);
-        _ownedHttp = CreateHttpClient();
-        Data = new DataClient(CreateHost(_ownedHttp, options), FullCacheDirectory(options));
+        // Every option is checked before the connections exist, so a refused option leaks none.
+        var cacheDirectory = Validate(options);
+        var http = CreateHttpClient();
+        try
+        {
+            Data = new DataClient(CreateHost(http, options), cacheDirectory);
+        }
+        catch
+        {
+            // Nothing here throws for valid options today; should a later change make it, nothing leaks.
+            http.Dispose();
+            throw;
+        }
+
+        _ownedHttp = http;
     }
 
     /// <summary>
@@ -48,7 +61,8 @@ public sealed class QuarterCallClient : IDisposable
     /// <param name="options">Where to read from, and how long to wait; the defaults when null.</param>
     /// <exception cref="ArgumentNullException"><paramref name="httpClient"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The data base address is not an absolute http or https address, or the cache directory is empty or blank.
+    /// The data base address is not an absolute http or https address, or the cache directory is empty, blank or not
+    /// a valid path.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The timeout is neither more than zero and at most 24 days, nor infinite.
@@ -57,8 +71,8 @@ public sealed class QuarterCallClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         options ??= new QuarterCallOptions();
-        Validate(options);
-        Data = new DataClient(CreateHost(httpClient, options), FullCacheDirectory(options));
+        var cacheDirectory = Validate(options);
+        Data = new DataClient(CreateHost(httpClient, options), cacheDirectory);
     }
 
     /// <summary>The evidence: the filings as the data host publishes them.</summary>
@@ -72,7 +86,8 @@ public sealed class QuarterCallClient : IDisposable
         _ownedHttp?.Dispose();
     }
 
-    private static void Validate(QuarterCallOptions options)
+    // Checks the options, and returns the cache directory as a full path, or null for none.
+    private static string? Validate(QuarterCallOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         var address = options.DataBaseAddress;
@@ -97,19 +112,29 @@ public sealed class QuarterCallClient : IDisposable
                 + "or Timeout.InfiniteTimeSpan for none.");
         }
 
-        if (options.CacheDirectory is { } cache && string.IsNullOrWhiteSpace(cache))
+        if (options.CacheDirectory is not { } cache)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(cache))
         {
             throw new ArgumentException(
                 $"The cache directory must name a directory, or be null to keep no cache; it is \"{cache}\".",
                 nameof(options));
         }
-    }
 
-    // A relative cache directory is taken from the working directory now, so that a later change of the working
-    // directory does not move the cache.
-    private static string? FullCacheDirectory(QuarterCallOptions options)
-    {
-        return options.CacheDirectory is { } cache ? Path.GetFullPath(cache) : null;
+        try
+        {
+            // A relative cache directory is taken from the working directory now, so that a later change of the
+            // working directory does not move the cache.
+            return Path.GetFullPath(cache);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ArgumentException(
+                $"The cache directory \"{cache}\" is not a valid path.", nameof(options), e);
+        }
     }
 
     private static HttpClient CreateHttpClient()

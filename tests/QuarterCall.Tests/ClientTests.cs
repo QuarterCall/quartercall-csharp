@@ -148,7 +148,9 @@ public class ClientTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void RefusesABlankCacheDirectory(string cacheDirectory)
+    // A path no file system accepts.
+    [InlineData("a\0b")]
+    public void RefusesAnUnusableCacheDirectory(string cacheDirectory)
     {
         var options = new QuarterCallOptions { CacheDirectory = cacheDirectory };
         using var http = new HttpClient();
@@ -158,6 +160,8 @@ public class ClientTests
 
         Assert.Equal("options", owned.ParamName);
         Assert.Equal("options", supplied.ParamName);
+        // The runtime's own refusal is kept inside.
+        Assert.Equal(cacheDirectory.Contains('\0'), owned.InnerException is ArgumentException);
         // Null still means no cache.
         using var uncached = new QuarterCallClient(new QuarterCallOptions { CacheDirectory = null });
     }
