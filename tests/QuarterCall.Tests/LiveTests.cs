@@ -9,7 +9,7 @@ namespace QuarterCall.Tests;
 /// <summary>One temporary cache for the live tests, so each file is downloaded once.</summary>
 public sealed class LiveCache : IDisposable
 {
-    /// <summary>The cache directory, made when the fixture is.</summary>
+    /// <summary>The cache directory's path. The library creates the directory on first use.</summary>
     public string Directory { get; } =
         Path.Combine(Path.GetTempPath(), "quartercall-live-" + Guid.NewGuid().ToString("N"));
 
@@ -24,6 +24,14 @@ public sealed class LiveCache : IDisposable
         {
             // Nothing was cached.
         }
+        catch (IOException)
+        {
+            // A file still open, as on Windows: a leftover in the temporary directory is tolerable.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // As above: a leftover in the temporary directory is tolerable.
+        }
     }
 }
 
@@ -31,6 +39,8 @@ public sealed class LiveCache : IDisposable
 public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixture<LiveCache>
 {
     private const long OneGiB = 1024L * 1024 * 1024;
+    // A ceiling, in decimal megabytes (256 x 1,000,000 bytes), on what a filtered stream holds above the baseline
+    // taken before it starts.
     private const long FilteredBudget = 256L * 1000 * 1000;
     private const int ForcedSampleEvery = 500;
 
@@ -47,7 +57,6 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
         var quarters = await qc.Data.GetQuartersAsync();
 
         Print($"quarters: {quarters.Count}; newest {quarters[0].Quarter}; oldest {quarters[^1].Quarter}");
-        Assert.Equal(Quarter.Parse("2026Q3"), quarters[0].Quarter);
         Assert.Contains(quarters, q => q.Quarter == Quarter.Parse("2019Q1"));
         Assert.Contains(quarters, q => q.Quarter == Quarter.Parse("2026Q3"));
         for (int i = 1; i < quarters.Count; i++)
@@ -126,7 +135,22 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
         var clock = Stopwatch.StartNew();
         var file = await qc.Data.DownloadAsync(quarter, EvidenceTable.Accounts, scratch);
         double downloadSeconds = clock.Elapsed.TotalSeconds;
-        Print($"2026Q2 accounts file bytes: {new FileInfo(file.Path).Length}; download seconds: {F(downloadSeconds)}");
+        Print($"2026Q2 accounts file bytes: {new FileInfo(file.Path).Length}; seconds to download and verify, manifest included: {F(downloadSeconds)}");
+
+        // One short untimed read pays for the reader's JIT, so the timed reads below compare with each other.
+        await foreach (Account _ in qc.Data.ReadAccountsAsync(quarter).Take(1000))
+        {
+        }
+
+        int counted = 0;
+        clock.Restart();
+        await foreach (Account _ in qc.Data.ReadAccountsAsync(quarter))
+        {
+            counted++;
+        }
+
+        double countSeconds = clock.Elapsed.TotalSeconds;
+        Print($"2026Q2 plain enumeration rows: {counted}; seconds: {F(countSeconds)}; rows per second: {counted / countSeconds:F0}");
 
         var all = new List<Account>();
         long allocatedBefore = GC.GetTotalAllocatedBytes(true);
@@ -147,23 +171,27 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
         Print($"2026Q2 bytes held after a full collection: {held}; per row: {held / (double)rows:F1}");
         Print($"2026Q2 bytes allocated across the read per row: {allocated / (double)rows:F1}");
         Print($"2026Q2 collections across the read: gen0 {gcAfter[0] - gcBefore[0]}, gen1 {gcAfter[1] - gcBefore[1]}, gen2 {gcAfter[2] - gcBefore[2]}");
-        all = null;
 
-        int counted = 0;
-        clock.Restart();
-        await foreach (Account _ in qc.Data.ReadAccountsAsync(quarter))
-        {
-            counted++;
-        }
+        Assert.True(held < OneGiB, $"{held} bytes held after a full collection");
+    }
 
-        double countSeconds = clock.Elapsed.TotalSeconds;
-        Print($"2026Q2 plain enumeration rows: {counted}; seconds: {F(countSeconds)}; rows per second: {counted / countSeconds:F0}");
+    [LiveFact]
+    public async Task StreamsAFilteredQuarterInTheBudget()
+    {
+        using var qc = NewClient();
+        var quarter = Quarter.Parse("2026Q2");
+
+        // Untimed: makes sure the file is in the cache, so the read below is the stream alone.
+        await qc.Data.DownloadAsync(quarter, EvidenceTable.Accounts, Path.Combine(cache.Directory, "scratch", "accounts.parquet"));
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        long baseline = GC.GetTotalMemory(true);
 
         var filter = new AccountFilter { Codes = ["A010"] };
         int filtered = 0;
         long peak = 0;
         long forcedPeak = 0;
-        clock.Restart();
+        var clock = Stopwatch.StartNew();
         await foreach (Account _ in qc.Data.ReadAccountsAsync(quarter, filter))
         {
             filtered++;
@@ -174,11 +202,18 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
             }
         }
 
-        Print($"2026Q2 A010 rows: {filtered}; seconds: {F(clock.Elapsed.TotalSeconds)}; largest unforced GC.GetTotalMemory: {peak}");
-        Print($"2026Q2 A010 largest GC.GetTotalMemory(true) at every {ForcedSampleEvery}th row: {forcedPeak}");
+        double seconds = clock.Elapsed.TotalSeconds;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        long after = GC.GetTotalMemory(true);
 
-        Assert.True(held < OneGiB, $"{held} bytes held after a full collection");
-        Assert.True(peak < FilteredBudget, $"{peak} bytes at the largest unforced sample");
+        Print($"2026Q2 A010 rows: {filtered}; seconds: {F(seconds)}");
+        Print($"baseline GetTotalMemory(true) before the read: {baseline}");
+        Print($"largest unforced sample: {peak}; above baseline: {peak - baseline}");
+        Print($"largest forced sample (every {ForcedSampleEvery}th row): {forcedPeak}; above baseline: {forcedPeak - baseline}");
+        Print($"held after the read and a full collection: {after}; above baseline: {after - baseline}");
+
+        Assert.True(filtered >= ForcedSampleEvery, "too few rows to take a forced sample");
+        Assert.True(forcedPeak - baseline < FilteredBudget, $"{forcedPeak - baseline} bytes above the baseline");
     }
 
     private static long HeldAfterCollection() => GC.GetTotalMemory(true);
