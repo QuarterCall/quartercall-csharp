@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QuarterCall/QuarterCall.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QuarterCall.Tests/QuarterCall.Tests.csproj" />
+  </Folder>
+</Solution>

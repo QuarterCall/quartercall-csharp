@@ -1,0 +1,50 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # The tests check that file times are reported as UTC. On a machine whose zone is UTC they cannot tell a
+      # time left alone from a time converted, so the job runs in a zone that can. TZ binds on Linux; .NET on
+      # Windows ignores it, so the Windows leg runs in the runner's own zone.
+      TZ: America/Los_Angeles
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        shell: bash
+        run: dotnet build -c Release --nologo
+
+      - name: Test
+        shell: bash
+        run: dotnet test -c Release --no-build --nologo
+
+      - name: Pack
+        shell: bash
+        run: dotnet pack -c Release --no-build --nologo -o artifacts
+
+      - name: Install check
+        shell: bash
+        run: bash eng/install-check.sh artifacts
