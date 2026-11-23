@@ -5,8 +5,9 @@ namespace QuarterCall;
 /// <summary>
 /// One credit union's profile for one filing: a row of a quarter's profiles file, as
 /// <see cref="DataClient.ReadProfilesAsync"/> reads it. The file's first eight columns are properties; the regulator's
-/// own columns, about 179 of them, are read by name with <see cref="GetString"/> and <see cref="GetInt32"/>, so a
-/// column the regulator adds is readable without a new version of the package. A caller cannot make one.
+/// own columns, about 179 of them, are read by name with <see cref="GetString"/> and <see cref="GetInt32"/>, or with
+/// <see cref="GetValue"/> whatever they hold, so a column the regulator adds is readable without a new version of the
+/// package. A caller cannot make one.
 /// </summary>
 public sealed class FilingProfile
 {
@@ -74,10 +75,31 @@ public sealed class FilingProfile
     public string ObservedAtSource { get; }
 
     /// <summary>
-    /// The names of the regulator's columns the file holds, in the file's order: every column after the eight that
-    /// are properties of this type.
+    /// The names of the regulator's columns the file holds, in the file's order: the columns after the eight that are
+    /// properties of this type. Text and integer columns are listed; a column of another type is left out until a
+    /// version of the package reads it.
     /// </summary>
     public IReadOnlyList<string> Columns => _columns.Names;
+
+    /// <summary>
+    /// Reads one of the regulator's columns whatever it holds: for printing or copying every column of
+    /// <see cref="Columns"/>. <see cref="GetString"/> and <see cref="GetInt32"/> are the typed readers.
+    /// </summary>
+    /// <param name="name">A name in <see cref="Columns"/>, matched exactly, case included.</param>
+    /// <returns>
+    /// A <see cref="string"/> for a text column, an <see cref="int"/> for an integer column; null where the file has
+    /// none.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is not in <see cref="Columns"/>. One of the eight leading columns is a property.
+    /// </exception>
+    public object? GetValue(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var column = _columns.Find(name);
+        return column.IsText ? _texts[column.Slot] : _numbers[column.Slot];
+    }
 
     /// <summary>Reads one of the regulator's text columns.</summary>
     /// <param name="name">A name in <see cref="Columns"/>, matched exactly, case included.</param>

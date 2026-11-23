@@ -70,8 +70,10 @@ await foreach (AccountText t in qc.Data.ReadAccountTextAsync(Quarter.Parse("2026
 ```
 
 Profiles. The first eight columns are properties. The regulator's own columns, about 179, are read by
-name: `Columns` lists them, `GetString` reads a text column and `GetInt32` an integer one. A column the
-regulator adds is readable without a new version of the package.
+name: `Columns` lists them, `GetString` reads a text column and `GetInt32` an integer one. `GetValue`
+reads a column whatever it holds, to print or copy every column. Text and integer columns are listed, so
+one the regulator adds is readable without a new version of the package; a column of another type is
+left out until a version of the package reads it.
 
 ```csharp
 var filter = new ProfileFilter { CuNumbers = [5536] };

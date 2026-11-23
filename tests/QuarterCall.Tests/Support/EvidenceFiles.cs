@@ -203,13 +203,16 @@ internal static class EvidenceFiles
     /// <summary>
     /// The bytes of a profiles file holding <paramref name="rows"/>: the eight leading columns, every one nullable
     /// but <c>quarter</c>, and then <paramref name="ncuaColumns"/> in the order given, each nullable. A column's
-    /// type is text, <see cref="int"/> or, for a test of a file that is refused, <see cref="double"/>.
-    /// <c>observed_at</c> is a timestamp in microseconds, not adjusted to UTC.
+    /// type is text, <see cref="int"/> or, for a test of a column the reader leaves out, <see cref="double"/>.
+    /// <c>observed_at</c> is a timestamp in microseconds, not adjusted to UTC. A leading column named by
+    /// <paramref name="doubleLeading"/> is written as a nullable <see cref="double"/> holding 1.5, for a test of a file
+    /// that is refused.
     /// </summary>
     public static byte[] Profiles(
         IReadOnlyList<ProfileRow> rows,
         IReadOnlyList<(string Name, Type Type)> ncuaColumns,
-        int rowsPerGroup = int.MaxValue)
+        int rowsPerGroup = int.MaxValue,
+        string? doubleLeading = null)
     {
         List<DataField> fields =
         [
@@ -223,6 +226,11 @@ internal static class EvidenceFiles
                 "observed_at", DateTimeFormat.DateAndTimeMicros, isAdjustedToUTC: false, isNullable: true),
             new DataField<string>("observed_at_source"),
         ];
+        var replaced = fields.FindIndex(field => field.Name == doubleLeading);
+        if (replaced >= 0)
+        {
+            fields[replaced] = new DataField<double?>(doubleLeading!);
+        }
         foreach (var (name, type) in ncuaColumns)
         {
             fields.Add(type switch
@@ -236,6 +244,8 @@ internal static class EvidenceFiles
 
         return WriteGroups(fields, rows, rowsPerGroup, (group, field, chunk) => field.Name switch
         {
+            _ when field.Name == doubleLeading => group.WriteAsync<double>(
+                field, chunk.Select(_ => (double?)1.5).ToArray()),
             "quarter" => group.WriteAsync(field, chunk.Select(row => row.Quarter).ToArray()),
             "cycle_date" => group.WriteAsync<DateTime>(
                 field, chunk.Select(row => (DateTime?)row.CycleDate.ToDateTime(TimeOnly.MinValue)).ToArray()),

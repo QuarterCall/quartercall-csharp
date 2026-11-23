@@ -200,9 +200,9 @@ public sealed class DataClient
     /// </exception>
     /// <exception cref="UnsupportedSchemaException">
     /// While enumerating: the manifest is of a schema version this version of the package does not read, or the file
-    /// is in a form it does not read: it lacks a column, holds one as another type, holds one of the regulator's
-    /// columns as neither text nor a 32-bit integer, or holds a null where a value is required, or is not a Parquet
-    /// file it can read.
+    /// is in a form it does not read: it lacks one of the eight leading columns, holds one as another type or holds a
+    /// null where a value is required, or is not a Parquet file it can read. A regulator's column of a type the
+    /// package does not read is left out of <see cref="FilingProfile.Columns"/>, and does not refuse the file.
     /// </exception>
     /// <exception cref="HttpRequestException">
     /// While enumerating: a request failed, or the host answered with an error.

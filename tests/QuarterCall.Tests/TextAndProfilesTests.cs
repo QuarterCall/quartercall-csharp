@@ -413,17 +413,70 @@ public sealed class TextAndProfilesTests : IDisposable
     }
 
     [Fact]
-    public async Task RefusesARegulatorsColumnOfAnotherType()
+    public async Task LeavesOutARegulatorsColumnOfAnotherType()
     {
-        (string Name, Type Type)[] columns = [.. Ncua, ("ratio", typeof(double))];
-        var host = PublishProfiles(EvidenceFiles.Profiles(ProfileRows, columns));
+        // A column of a type the package does not read, between two it does.
+        (string Name, Type Type)[] columns = [Ncua[0], ("ratio", typeof(double)), Ncua[1], Ncua[2]];
+        var rows = ProfileRows.Select(row => row with
+        {
+            Values = new Dictionary<string, object?>(row.Values) { ["ratio"] = 0.25 },
+        }).ToArray();
+        var host = PublishProfiles(EvidenceFiles.Profiles(rows, columns, RowsPerGroup));
+        using var client = Client(host);
+
+        var read = await ReadProfilesAsync(client);
+
+        Assert.Equal(new[] { 5163, 24212, 30000 }, CuNumbers(read));
+        Assert.Equal(new[] { "credit_union_name", "state", "acct_892a" }, read[0].Columns);
+        Assert.Equal("NORTHERN", read[0].GetString("credit_union_name"));
+        Assert.Equal("TX", read[0].GetString("state"));
+        Assert.Equal(17, read[0].GetInt32("acct_892a"));
+        // The left-out name is not a column of the profile, as for any name not in Columns.
+        Assert.Throws<ArgumentException>(() => read[0].GetString("ratio"));
+        Assert.Throws<ArgumentException>(() => read[0].GetInt32("ratio"));
+        Assert.Throws<ArgumentException>(() => read[0].GetValue("ratio"));
+        Assert.Empty(Directory.GetFileSystemEntries(_temporary));
+    }
+
+    [Fact]
+    public async Task RefusesALeadingColumnOfAnotherType()
+    {
+        var host = PublishProfiles(EvidenceFiles.Profiles(ProfileRows, Ncua, doubleLeading: "version"));
         using var client = Client(host);
 
         var e = await Assert.ThrowsAsync<UnsupportedSchemaException>(() => ReadProfilesAsync(client));
 
-        Assert.Contains("\"ratio\"", e.Message);
+        Assert.Contains("\"version\"", e.Message);
         Assert.Contains("upgrade", e.Message);
         Assert.Empty(Directory.GetFileSystemEntries(_temporary));
+    }
+
+    [Fact]
+    public async Task ReadsEveryColumnWhateverItHolds()
+    {
+        var host = PublishProfiles(EvidenceFiles.Profiles(ProfileRows, Ncua, RowsPerGroup));
+        using var client = Client(host);
+
+        var read = await ReadProfilesAsync(client);
+
+        foreach (var profile in read)
+        {
+            foreach (var name in profile.Columns)
+            {
+                var value = profile.GetValue(name);
+                var isInteger = Ncua.Single(column => column.Name == name).Type == typeof(int);
+                object? typed = isInteger ? profile.GetInt32(name) : profile.GetString(name);
+                Assert.Equal(typed, value);
+            }
+        }
+
+        Assert.IsType<string>(read[0].GetValue("state"));
+        Assert.IsType<int>(read[0].GetValue("acct_892a"));
+        Assert.Equal(17, read[0].GetValue("acct_892a"));
+        Assert.Null(read[1].GetValue("acct_892a"));
+        Assert.Throws<ArgumentNullException>(() => read[0].GetValue(null!));
+        Assert.Throws<ArgumentException>(() => read[0].GetValue("nope"));
+        Assert.Contains("property", Assert.Throws<ArgumentException>(() => read[0].GetValue("cu_number")).Message);
     }
 
     [Fact]

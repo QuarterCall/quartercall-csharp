@@ -5,7 +5,8 @@ namespace QuarterCall.Internal;
 
 /// <summary>
 /// Where each of a profiles file's regulator columns is held in a <see cref="FilingProfile"/>: the file's columns
-/// after the eight that lead it, in file order, each text or a 32-bit integer. One index serves every row of a stream.
+/// after the eight that lead it that hold text or a 32-bit integer, in file order. One index serves every row of a
+/// stream.
 /// </summary>
 internal sealed class ProfileColumns
 {
@@ -38,11 +39,10 @@ internal sealed class ProfileColumns
 
     /// <summary>
     /// The columns of <paramref name="table"/> after <paramref name="leading"/>, which it must hold in the types
-    /// given.
+    /// given. A column that holds neither text nor a 32-bit integer is left out: the regulator may add a column of
+    /// any type, and the rest of the file is still read.
     /// </summary>
-    /// <exception cref="UnsupportedSchemaException">
-    /// A leading column is missing or of another type, or another column is neither text nor a 32-bit integer.
-    /// </exception>
+    /// <exception cref="UnsupportedSchemaException">A leading column is missing or of another type.</exception>
     public static ProfileColumns Of(ParquetTable table, IReadOnlyList<(string Name, Type Type)> leading)
     {
         foreach (var (name, type) in leading)
@@ -63,10 +63,8 @@ internal sealed class ProfileColumns
             var type = table.ColumnType(name);
             if (type != typeof(ReadOnlyMemory<char>) && type != typeof(int))
             {
-                throw new UnsupportedSchemaException(
-                    $"The profiles file's column \"{name}\" holds {type.Name}, where this version of QuarterCall "
-                    + $"reads text or a 32-bit integer in the regulator's columns. The file may be of a newer form. "
-                    + ReadRules.Remedy);
+                // Left out until a version of the package reads its type.
+                continue;
             }
 
             names.Add(name);
@@ -165,9 +163,9 @@ internal sealed class ProfileRows
     /// columns are read first, and a row group in which no row matches reads no other.
     /// </summary>
     /// <exception cref="UnsupportedSchemaException">
-    /// The file lacks a leading column, or holds one as another type, or holds a regulator's column that is neither
-    /// text nor a 32-bit integer, or a null where a record requires a value, or a <c>quarter</c> that is not a
-    /// quarter's label, or cannot be read. The columns are checked before the first row.
+    /// The file lacks a leading column, or holds one as another type, or holds a null where a record requires a value,
+    /// or a <c>quarter</c> that is not a quarter's label, or cannot be read. The leading columns are checked before
+    /// the first row.
     /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled.</exception>
     public async IAsyncEnumerable<FilingProfile> ReadAsync(
