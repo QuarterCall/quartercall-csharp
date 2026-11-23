@@ -13,6 +13,9 @@ public sealed class AccountsTests : IDisposable
     // Rows 0 to 2 fall in the first row group, 3 and 4 in the second.
     private const int RowsPerGroup = 3;
 
+    // Where the host serves the quarter's accounts file, relative to its base address.
+    private const string FilePath = "curated/accounts/quarter=2026Q3/data.parquet";
+
     private static readonly Quarter Q2026Q3 = Quarter.Parse("2026Q3");
 
     private static readonly DateOnly CycleDate = new(2026, 9, 30);
@@ -30,6 +33,9 @@ public sealed class AccountsTests : IDisposable
         new("2026Q3", CycleDate, 24212, 913_587L, 2, "A010", -0.00000001m, IngestedAt.AddHours(1), 4170),
         new("2026Q3", CycleDate, 24212, 913_587L, 2, "A018", 42m, IngestedAt.AddHours(1), null),
     ];
+
+    // The rows of another file: the same filings, with values that differ.
+    private static readonly AccountRow[] OtherRows = [.. Rows.Select(row => row with { AccountValue = 7m })];
 
     // Each test works beneath a directory of its own, removed afterwards. Its clients keep the files they read
     // without a cache in _temporary, so a test sees every file a read leaves there.
@@ -109,6 +115,77 @@ public sealed class AccountsTests : IDisposable
         using var client = Client(host);
 
         Assert.Empty(await ReadAsync(client));
+        Assert.Empty(Directory.GetFileSystemEntries(_temporary));
+    }
+
+    [Fact]
+    public async Task RefusesABodyThatDoesNotMatchTheManifest()
+    {
+        var host = Publish(EvidenceFiles.Accounts(Rows, RowsPerGroup));
+        // The host serves another accounts file, readable but not the one its manifest describes.
+        host.Bodies[FilePath] = EvidenceFiles.Accounts(OtherRows, RowsPerGroup);
+        using var client = Client(host);
+        var read = new List<Account>();
+
+        var e = await Assert.ThrowsAsync<DataIntegrityException>(async () =>
+        {
+            await foreach (var account in client.Data.ReadAccountsAsync(Q2026Q3))
+            {
+                read.Add(account);
+            }
+        });
+
+        Assert.Contains("does not match the manifest", e.Message);
+        Assert.Empty(read);
+        Assert.Equal(3, host.Requests.Count(r => r.Uri == ManifestUri(host)));
+        Assert.Equal(3, host.Requests.Count(r => r.Uri == FileUri(host)));
+        Assert.Empty(Directory.GetFileSystemEntries(_temporary));
+    }
+
+    [Fact]
+    public async Task FetchesAgainACachedFileOfTheRightLengthAndOtherBytes()
+    {
+        var body = EvidenceFiles.Accounts(Rows, RowsPerGroup);
+        var host = Publish(body);
+        var cache = Path.Combine(_root, "cache");
+        using var client = Client(host, cache);
+        Assert.Equal(Rows.Select(ToAccount), await ReadAsync(client));
+        var cached = Path.Combine(cache, Digest(body) + ".parquet");
+        var changed = body.ToArray();
+        changed[changed.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(cached, changed);
+
+        var read = await ReadAsync(client);
+
+        Assert.Equal(Rows.Select(ToAccount), read);
+        Assert.Equal(2, host.Requests.Count(r => r.Uri == FileUri(host)));
+        Assert.Equal(body, await File.ReadAllBytesAsync(cached));
+    }
+
+    [Fact]
+    public async Task ReadsTheNewerFileAfterAMismatch()
+    {
+        var host = Publish(EvidenceFiles.Accounts(Rows, RowsPerGroup));
+        var entry = host.Manifest["quarters"]![0]!.AsObject();
+        var republished = EvidenceFiles.Accounts(OtherRows, RowsPerGroup);
+        host.Bodies[FilePath] = republished;
+        // The host republishes while the first copy is read: its manifest then names the new file.
+        host.OnRequest = request =>
+        {
+            if (request.RequestUri == FileUri(host))
+            {
+                entry["accounts_sha256"] = Digest(republished);
+                entry["accounts_bytes"] = republished.LongLength;
+            }
+
+            return null;
+        };
+        using var client = Client(host);
+
+        var read = await ReadAsync(client);
+
+        Assert.Equal(OtherRows.Select(ToAccount), read);
+        Assert.Equal(2, host.Requests.Count(r => r.Uri == ManifestUri(host)));
         Assert.Empty(Directory.GetFileSystemEntries(_temporary));
     }
 
@@ -628,7 +705,7 @@ public sealed class AccountsTests : IDisposable
 
     private static Uri FileUri(FixtureHost host)
     {
-        return new Uri(host.BaseAddress, "curated/accounts/quarter=2026Q3/data.parquet");
+        return new Uri(host.BaseAddress, FilePath);
     }
 
     private static string Digest(byte[] body)
