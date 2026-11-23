@@ -5,6 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="QuarterCall.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Parquet.Net" />
   </ItemGroup>
 
