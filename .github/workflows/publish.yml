@@ -1,5 +1,6 @@
 # Pushing a tag named v followed by the version builds, tests and packs the package, then publishes it to
-# nuget.org. A manual run builds, tests and packs, keeps the package as an artifact, and publishes nowhere.
+# nuget.org. A manual run, even one started on a tag, builds, tests and packs, keeps the package as an artifact,
+# and publishes nowhere.
 name: publish
 
 on:
@@ -32,7 +33,7 @@ jobs:
           dotnet test -c Release --no-build --nologo
 
       - name: Check the tag against the version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           version="$(dotnet msbuild src/QuarterCall -getProperty:Version | tr -d '\r')"
@@ -53,7 +54,7 @@ jobs:
 
   nuget:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: nuget
     permissions:

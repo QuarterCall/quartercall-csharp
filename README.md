@@ -16,7 +16,7 @@ await foreach (Account a in qc.Data.ReadAccountsAsync(Quarter.Parse("2026Q3"), f
 }
 ```
 
-This prints five charter numbers with account `A010` and its value. It downloads one file of about 25 MB.
+This is a complete `Program.cs` for a console project with implicit usings on, which is the default for a new one. It prints five charter numbers with account `A010` and its value, and downloads one file of about 25 MB.
 
 ## Install
 
@@ -167,7 +167,7 @@ using var qc = new QuarterCallClient(httpClient, new QuarterCallOptions { CacheD
 
 ## Exceptions
 
-Four exceptions, all deriving from `QuarterCallException`, which catches any of them.
+Three exceptions, each a `QuarterCallException`, so catching the base catches any of them. The table lists the base and the three.
 
 | Exception | Meaning |
 |---|---|
@@ -184,4 +184,4 @@ Measures and ratios.
 
 ## Licence
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. See [LICENSE](https://github.com/QuarterCall/quartercall-csharp/blob/main/LICENSE).

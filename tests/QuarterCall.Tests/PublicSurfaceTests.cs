@@ -1,5 +1,5 @@
-using Xunit;
 using System.Reflection;
+using Xunit;
 
 namespace QuarterCall.Tests;
 
@@ -30,27 +30,58 @@ public sealed class PublicSurfaceTests
     }
 
     [Fact]
+    public void The_walker_reports_a_foreign_type_as_a_parameter_a_generic_argument_and_an_array_element()
+    {
+        var foreign = new List<string>();
+
+        WalkMembers(typeof(Leaky), foreign);
+
+        Assert.Contains(foreign, f => f.StartsWith("Leaky.AsParameter"));
+        Assert.Contains(foreign, f => f.StartsWith("Leaky.AsGenericArgument"));
+        Assert.Contains(foreign, f => f.StartsWith("Leaky.AsArrayElement"));
+        Assert.All(foreign, f => Assert.Contains("Parquet", f));
+    }
+
+    [Fact]
     public void No_exposed_member_uses_a_type_from_another_package()
     {
         var foreign = new List<string>();
         foreach (var type in Package.GetExportedTypes())
         {
-            Check(type.BaseType, type.FullName + " base type", foreign);
-            foreach (var implemented in type.GetInterfaces())
-            {
-                Check(implemented, type.FullName + " interface", foreign);
-            }
-
-            foreach (var member in type.GetMembers(Visible).Where(IsExposed))
-            {
-                foreach (var used in TypesOf(member))
-                {
-                    Check(used, $"{type.FullName}.{member.Name}", foreign);
-                }
-            }
+            WalkMembers(type, foreign);
         }
 
         Assert.Empty(foreign);
+    }
+
+    // A public type whose members expose a Parquet.Net type three ways: the control for the walker.
+    public sealed class Leaky
+    {
+        public void AsParameter(Parquet.ParquetOptions options)
+        {
+        }
+
+        public List<Parquet.ParquetOptions> AsGenericArgument => [];
+
+        public Parquet.ParquetOptions[] AsArrayElement => [];
+    }
+
+    private static void WalkMembers(Type type, List<string> foreign)
+    {
+        var name = type.IsNested ? type.Name : type.FullName;
+        Check(type.BaseType, name + " base type", foreign);
+        foreach (var implemented in type.GetInterfaces())
+        {
+            Check(implemented, name + " interface", foreign);
+        }
+
+        foreach (var member in type.GetMembers(Visible).Where(IsExposed))
+        {
+            foreach (var used in TypesOf(member))
+            {
+                Check(used, $"{name}.{member.Name}", foreign);
+            }
+        }
     }
 
     private static bool IsExposed(MemberInfo member) => member switch

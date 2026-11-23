@@ -21,7 +21,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     env:
       # The tests check that file times are reported as UTC. On a machine whose zone is UTC they cannot tell a
-      # time left alone from a time converted, so the job runs in a zone that can.
+      # time left alone from a time converted, so the job runs in a zone that can. TZ binds on Linux; .NET on
+      # Windows ignores it, so the Windows leg runs in the runner's own zone.
       TZ: America/Los_Angeles
     steps:
       - uses: actions/checkout@v7
