@@ -97,6 +97,93 @@ public class QuorumTests
         Assert.Equal("index/quorum/quarter=2026Q3/data.parquet", quorum.DetailPath);
         Assert.Equal(2, quorum.Verdicts.Count);
         Assert.Equal("observed", quorum.Verdicts["floor/1"].ReachedAtBasis);
+
+        Assert.Equal(0, quorum.FiledUnweighted);
+        Assert.Equal(0, quorum.FiledByCharter);
+        Assert.Equal(0, quorum.Excused);
+        Assert.Equal(2519499535513L, quorum.AssetsFiled);
+        Assert.Equal(1440630816L, quorum.LargestOutstandingAssets);
+        Assert.Equal(0.9932558139534884m, quorum.CoverageByCount);
+        Assert.Equal(0.9987243565507544m, quorum.CoverageByAssets);
+        Assert.Equal(1m, quorum.CoverageByAssetsCeiling);
+        Assert.Equal(0.0005710630482191507m, quorum.CoverageLargestOutstandingShare);
+        Assert.Equal("60194807b6534a558c5829b2e0e8b9f0545be972d00172c3b96e19b0ba16fe9f", quorum.DetailSha256);
+        Assert.Equal(new[] { "floor/1", "default/1" }, quorum.Verdicts.Keys.OrderByDescending(k => k));
+        foreach (var verdict in quorum.Verdicts.Values)
+        {
+            Assert.Equal(QuorumStatus.Reached, verdict.Status);
+            Assert.Equal(new DateTimeOffset(2026, 10, 31, 5, 14, 53, TimeSpan.Zero), verdict.ReachedAt);
+            Assert.Null(verdict.BelowSince);
+        }
+
+        Assert.Empty(quorum.OutstandingMaterial);
+    }
+
+    [Fact]
+    public async Task ReadsEveryTimeAsUtc()
+    {
+        var quorum = Published();
+        quorum["measured_at"] = "2026-11-21T07:11:05+02:00";
+        quorum["verdicts"] = new JsonObject
+        {
+            ["floor/1"] = new JsonObject
+            {
+                ["status"] = "reached",
+                ["reached_at"] = "2026-10-31T07:14:53+02:00",
+                ["below_since"] = "2026-10-30T07:14:53+02:00",
+            },
+        };
+
+        var read = await ReadQuorumAsync(quorum);
+
+        Assert.Equal(new DateTimeOffset(2026, 11, 21, 5, 11, 5, TimeSpan.Zero), read.MeasuredAt);
+        Assert.Equal(TimeSpan.Zero, read.MeasuredAt!.Value.Offset);
+        var verdict = read.Verdicts["floor/1"];
+        Assert.Equal(new DateTimeOffset(2026, 10, 31, 5, 14, 53, TimeSpan.Zero), verdict.ReachedAt);
+        Assert.Equal(TimeSpan.Zero, verdict.ReachedAt!.Value.Offset);
+        Assert.Equal(new DateTimeOffset(2026, 10, 30, 5, 14, 53, TimeSpan.Zero), verdict.BelowSince);
+        Assert.Equal(TimeSpan.Zero, verdict.BelowSince!.Value.Offset);
+    }
+
+    [Fact]
+    public async Task ReadsAVerdictWithoutAStatusAsUnknown()
+    {
+        var quorum = Published();
+        quorum["verdicts"] = new JsonObject { ["floor/1"] = new JsonObject() };
+
+        var read = await ReadQuorumAsync(quorum);
+
+        Assert.Equal(QuorumStatus.Unknown, read.Verdicts["floor/1"].Status);
+        Assert.False(read.HasReached("floor/1"));
+    }
+
+    [Theory]
+    [InlineData("verdicts")]
+    [InlineData("outstanding_material")]
+    public async Task RefusesANullCollection(string member)
+    {
+        var quorum = Published();
+        quorum[member] = null;
+
+        await Assert.ThrowsAsync<DataIntegrityException>(() => ReadAsync(quorum));
+    }
+
+    [Fact]
+    public async Task RefusesANullVerdict()
+    {
+        var quorum = Published();
+        quorum["verdicts"] = new JsonObject { ["floor/1"] = null };
+
+        await Assert.ThrowsAsync<DataIntegrityException>(() => ReadAsync(quorum));
+    }
+
+    [Fact]
+    public async Task RefusesANullOutstandingFiler()
+    {
+        var quorum = Published();
+        quorum["outstanding_material"] = new JsonArray(new JsonObject { ["cuid"] = 1 }, null);
+
+        await Assert.ThrowsAsync<DataIntegrityException>(() => ReadAsync(quorum));
     }
 
     [Fact]
