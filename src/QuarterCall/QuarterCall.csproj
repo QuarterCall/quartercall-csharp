@@ -1,11 +1,36 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <PackageId>QuarterCall</PackageId>
+    <RootNamespace>QuarterCall</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>QuarterCall Holdings Inc.</Authors>
+    <Company>QuarterCall Holdings Inc.</Company>
+    <Copyright>QuarterCall Holdings Inc.</Copyright>
+    <Description>Read QuarterCall's credit-union Call Report data (NCUA Form 5300) into typed C# records.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://quartercall.com/</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/QuarterCall/quartercall-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>credit union;NCUA;call report;5300</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(CI)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="QuarterCall.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
