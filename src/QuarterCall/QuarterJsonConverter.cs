@@ -59,15 +59,13 @@ public sealed class QuarterJsonConverter : JsonConverter<Quarter>
 
     private static Quarter ReadLabel(ref Utf8JsonReader reader)
     {
-        // Copying at most one label's worth of characters keeps the read free of heap allocation.
-        Span<char> chars = stackalloc char[8];
-        if (reader.HasValueSequence || reader.ValueSpan.Length > chars.Length)
-        {
-            throw new JsonException("A quarter is a label such as \"2026Q3\".");
-        }
-
-        var length = reader.CopyString(chars);
-        if (Quarter.TryParse(chars[..length], null, out var quarter))
+        // A label is six characters, each at most six bytes when written as a \u escape. A longer
+        // string cannot be a label, and a shorter one fits the buffer once unescaped.
+        const int MaxRawBytes = 36;
+        Span<char> chars = stackalloc char[MaxRawBytes];
+        var rawLength = reader.HasValueSequence ? reader.ValueSequence.Length : reader.ValueSpan.Length;
+        if (rawLength <= MaxRawBytes
+            && Quarter.TryParse(chars[..reader.CopyString(chars)], null, out var quarter))
         {
             return quarter;
         }

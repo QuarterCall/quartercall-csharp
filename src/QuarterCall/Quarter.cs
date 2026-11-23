@@ -38,7 +38,20 @@ public readonly record struct Quarter : IComparable<Quarter>, ISpanParsable<Quar
     public int Number => (_index % QuartersPerYear) + 1;
 
     /// <summary>The quarter's last day, the date its Call Reports are as of.</summary>
-    public DateOnly CycleDate => new DateOnly(Year, Number * 3, 1).AddMonths(1).AddDays(-1);
+    /// <exception cref="InvalidOperationException">This is the default quarter, which names no period.</exception>
+    public DateOnly CycleDate
+    {
+        get
+        {
+            if (_index < MinYear * QuartersPerYear)
+            {
+                throw new InvalidOperationException("The default Quarter names no quarter.");
+            }
+
+            var month = Number * 3;
+            return new DateOnly(Year, month, DateTime.DaysInMonth(Year, month));
+        }
+    }
 
     /// <summary>Parses a label such as <c>2026Q3</c>.</summary>
     /// <param name="s">The label: four ASCII digits, <c>Q</c>, and <c>1</c> to <c>4</c>.</param>

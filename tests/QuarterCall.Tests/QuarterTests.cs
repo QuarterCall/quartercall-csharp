@@ -1,4 +1,5 @@
 using Xunit;
+using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
 
@@ -131,5 +132,56 @@ public class QuarterTests
         Assert.Throws<ArgumentException>(() => default(Quarter).ThrowIfDefault("quarter"));
         Quarter.Parse("2019Q1").ThrowIfDefault("quarter");
         Assert.NotNull(default(Quarter).ToString());
+    }
+
+    [Fact]
+    public void GivesEveryValidQuarterACycleDate()
+    {
+        Assert.Equal(new DateOnly(9999, 12, 31), new Quarter(9999, 4).CycleDate);
+        Assert.Equal(new DateOnly(1, 3, 31), new Quarter(1, 1).CycleDate);
+        Assert.Equal(new DateOnly(2024, 6, 30), new Quarter(2024, 2).CycleDate);
+        Assert.Throws<InvalidOperationException>(() => default(Quarter).CycleDate);
+    }
+
+    [Fact]
+    public void ReadsAnEscapedLabel()
+    {
+        var holder = JsonSerializer.Deserialize<Holder>("{\"Quarter\":\"2026\\u0051\\u0033\"}");
+        Assert.Equal(new Quarter(2026, 3), holder!.Quarter);
+
+        var map = JsonSerializer.Deserialize<Dictionary<Quarter, int>>("{\"2026\\u0051\\u0033\":4}");
+        Assert.Equal(4, map![new Quarter(2026, 3)]);
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Holder>("{\"Quarter\":\"2026Q3000000\"}"));
+    }
+
+    [Fact]
+    public void ReadsALabelSplitAcrossSegments()
+    {
+        var first = new Segment("\"20"u8.ToArray());
+        var last = first.Append("26Q3\""u8.ToArray());
+        var sequence = new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
+        var reader = new Utf8JsonReader(sequence);
+        reader.Read();
+        Assert.True(reader.HasValueSequence);
+
+        var q = new QuarterJsonConverter().Read(ref reader, typeof(Quarter), JsonSerializerOptions.Default);
+
+        Assert.Equal(new Quarter(2026, 3), q);
+    }
+
+    private sealed class Segment : ReadOnlySequenceSegment<byte>
+    {
+        public Segment(ReadOnlyMemory<byte> memory)
+        {
+            Memory = memory;
+        }
+
+        public Segment Append(ReadOnlyMemory<byte> memory)
+        {
+            var next = new Segment(memory) { RunningIndex = RunningIndex + Memory.Length };
+            Next = next;
+            return next;
+        }
     }
 }
