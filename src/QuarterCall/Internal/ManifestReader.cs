@@ -105,7 +105,7 @@ internal sealed class ManifestReader
             DormantSince = entry.DormantSince,
             SubmissionCount = entry.SubmissionCount,
             CuCount = entry.CuCount,
-            CountsAt = entry.CountsAt?.ToUniversalTime(),
+            CountsAt = entry.CountsAt,
             AccountsSha256 = entry.AccountsSha256,
             AccountsBytes = entry.AccountsBytes,
             AccountsTextPath = entry.AccountsTextPath,
@@ -116,7 +116,7 @@ internal sealed class ManifestReader
             ProfilesBytes = entry.ProfilesBytes,
             ProfileRows = entry.ProfileRows,
             ProfilesMissing = entry.ProfilesMissing,
-            UpdatedAt = entry.UpdatedAt?.ToUniversalTime(),
+            UpdatedAt = entry.UpdatedAt,
         };
     }
 }

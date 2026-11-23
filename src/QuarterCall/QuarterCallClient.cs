@@ -12,6 +12,10 @@ public sealed class QuarterCallClient : IDisposable
     // Within the longest timeout HttpClient accepts, int.MaxValue milliseconds or about 24.8 days.
     private const int MaxTimeoutDays = 24;
 
+    // A client may serve a whole application. Retiring each pooled connection after this long makes it resolve
+    // the host's name again, so a change of the host's address reaches a client that never restarts.
+    private const int ConnectionLifetimeMinutes = 15;
+
     private readonly HttpClient? _ownedHttp;
 
     /// <summary>Creates a client of the public data host, <c>https://data.quartercall.com/</c>.</summary>
@@ -24,7 +28,9 @@ public sealed class QuarterCallClient : IDisposable
     /// <param name="options">Where to read from, and how long to wait.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">The data base address is not an absolute http or https address.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The timeout is not positive or infinite.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The timeout is neither more than zero and at most 24 days, nor infinite.
+    /// </exception>
     public QuarterCallClient(QuarterCallOptions options)
     {
         Validate(options);
@@ -40,7 +46,9 @@ public sealed class QuarterCallClient : IDisposable
     /// <param name="options">Where to read from, and how long to wait; the defaults when null.</param>
     /// <exception cref="ArgumentNullException"><paramref name="httpClient"/> is null.</exception>
     /// <exception cref="ArgumentException">The data base address is not an absolute http or https address.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The timeout is not positive or infinite.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The timeout is neither more than zero and at most 24 days, nor infinite.
+    /// </exception>
     public QuarterCallClient(HttpClient httpClient, QuarterCallOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
@@ -81,13 +89,18 @@ public sealed class QuarterCallClient : IDisposable
             throw new ArgumentOutOfRangeException(
                 nameof(options),
                 timeout,
-                "The timeout must be more than zero and at most 24 days, or Timeout.InfiniteTimeSpan for none.");
+                $"The timeout must be more than zero and at most {MaxTimeoutDays} days, "
+                + "or Timeout.InfiniteTimeSpan for none.");
         }
     }
 
     private static HttpClient CreateHttpClient()
     {
-        var handler = new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.All };
+        var handler = new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.All,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(ConnectionLifetimeMinutes),
+        };
         // The client's own timeout covers each request to its last byte, so HttpClient's is switched off.
         return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }

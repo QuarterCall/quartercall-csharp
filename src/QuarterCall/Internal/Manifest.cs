@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace QuarterCall.Internal;
@@ -5,16 +7,20 @@ namespace QuarterCall.Internal;
 /// <summary>The one member of the manifest read before the rest: its <c>schema_version</c>.</summary>
 internal sealed record ManifestHeader
 {
+    // Any JSON value, so that a version which is not a string is refused as a version, not as malformed JSON.
+    // Undefined when the key is absent.
     [JsonPropertyName("schema_version")]
-    public string? SchemaVersion { get; init; }
+    public JsonElement SchemaVersion { get; init; }
 }
 
 /// <summary>The members of the manifest the client reads. Every other member is skipped.</summary>
 internal sealed record ManifestDocument
 {
-    // An element of the array may still be null: element nullability is not checked by the serializer.
+    // Absent means none, so the initialiser stands; a null or a value that is not an array is malformed. A set
+    // accessor: through an init accessor, the generated reader replaced the initialiser with null for an absent
+    // key. An element may still be null: the serializer does not check the nullability of an element.
     [JsonPropertyName("quarters")]
-    public required IReadOnlyList<ManifestQuarter?> Quarters { get; init; }
+    public IReadOnlyList<ManifestQuarter?> Quarters { get; set; } = [];
 
     [JsonPropertyName("index")]
     public ManifestIndex? Index { get; init; }
@@ -95,10 +101,38 @@ internal sealed record ManifestIndex
 }
 
 /// <summary>
-/// Reads the manifest's documents. A member given null where the type does not allow it is an error, as is a
-/// required member that is absent; a member the type does not name is skipped.
+/// Reads a time as UTC: one written with an offset is converted, and one written without is taken to be UTC
+/// already, so the result never depends on the machine's time zone.
 /// </summary>
-[JsonSourceGenerationOptions(RespectNullableAnnotations = true)]
+internal sealed class UtcTimeConverter : JsonConverter<DateTimeOffset>
+{
+    // ISO 8601: a fraction of a second is optional, and K takes "Z", an offset, or nothing.
+    private const string Format = "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK";
+
+    private const DateTimeStyles Styles = DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal;
+
+    public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        if (DateTimeOffset.TryParseExact(text, Format, CultureInfo.InvariantCulture, Styles, out var time))
+        {
+            return time;
+        }
+
+        throw new JsonException("A time is an ISO 8601 string such as \"2026-11-22T21:46:36Z\".");
+    }
+
+    public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value.ToUniversalTime());
+    }
+}
+
+/// <summary>
+/// Reads the manifest's documents. A member given null where the type does not allow it is an error, as is a
+/// required member that is absent; a member the type does not name is skipped. Every time is read as UTC.
+/// </summary>
+[JsonSourceGenerationOptions(RespectNullableAnnotations = true, Converters = [typeof(UtcTimeConverter)])]
 [JsonSerializable(typeof(ManifestHeader))]
 [JsonSerializable(typeof(ManifestDocument))]
 internal sealed partial class ManifestJsonContext : JsonSerializerContext;

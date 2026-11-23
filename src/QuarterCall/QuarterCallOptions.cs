@@ -20,8 +20,8 @@ public sealed class QuarterCallOptions
     public string? CacheDirectory { get; init; }
 
     /// <summary>
-    /// How long one request may take, to its last byte; 100 seconds unless set.
-    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> sets no limit. A request that takes longer throws
+    /// How long one request may take, to its last byte; 100 seconds unless set. More than zero and at most 24 days,
+    /// or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for no limit. A request that takes longer throws
     /// <see cref="TaskCanceledException"/> holding a <see cref="TimeoutException"/>.
     /// </summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(DefaultTimeoutSeconds);

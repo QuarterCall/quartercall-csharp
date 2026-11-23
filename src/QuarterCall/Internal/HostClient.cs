@@ -42,6 +42,11 @@ internal sealed class HostClient
     /// Sends a GET for <paramref name="uri"/>, and once its headers arrive, reads the response with
     /// <paramref name="read"/>. The timeout runs until <paramref name="read"/> completes.
     /// </summary>
+    /// <remarks>
+    /// The response, its body included, is disposed as soon as <paramref name="read"/> completes. So
+    /// <paramref name="read"/> must finish with the body itself, and must not return a stream, or anything else,
+    /// that reads the body later.
+    /// </remarks>
     /// <param name="uri">The address to read.</param>
     /// <param name="read">Reads the successful response; its token carries the timeout.</param>
     /// <param name="ct">The caller's token.</param>

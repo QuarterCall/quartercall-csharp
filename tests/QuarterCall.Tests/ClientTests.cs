@@ -132,6 +132,18 @@ public class ClientTests
     }
 
     [Fact]
+    public void RefusesATimeoutOver24Days()
+    {
+        var longest = new QuarterCallOptions { Timeout = TimeSpan.FromDays(24) };
+        var longer = new QuarterCallOptions { Timeout = TimeSpan.FromDays(24) + TimeSpan.FromMilliseconds(1) };
+
+        using var client = new QuarterCallClient(longest);
+        var e = Assert.Throws<ArgumentOutOfRangeException>(() => new QuarterCallClient(longer));
+
+        Assert.Contains("at most 24 days", e.Message);
+    }
+
+    [Fact]
     public void DefaultsToThePublicHost()
     {
         var options = new QuarterCallOptions();

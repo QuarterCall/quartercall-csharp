@@ -112,6 +112,41 @@ public class ManifestTests
         Assert.Equal(13694750L, snapshot.SubmissionsBytes);
     }
 
+    [Theory]
+    [InlineData("2026-09-27T06:49:02")]
+    [InlineData("2026-09-27T06:49:02Z")]
+    [InlineData("2026-09-27T02:49:02-04:00")]
+    [InlineData("2026-09-27T07:49:02+01:00")]
+    public async Task ReadsATimeWithoutAnOffsetAsUtc(string written)
+    {
+        var host = new FixtureHost();
+        var entry = host.AddQuarter("2026Q3");
+        entry["counts_at"] = written;
+        entry["updated_at"] = written;
+        using var client = host.CreateClient();
+
+        var quarter = Assert.Single(await client.Data.GetQuartersAsync());
+
+        // Equality of DateTimeOffset ignores the offset, so the offset is checked apart.
+        var expected = new DateTimeOffset(2026, 9, 27, 6, 49, 2, TimeSpan.Zero);
+        Assert.Equal(expected, quarter.CountsAt);
+        Assert.Equal(TimeSpan.Zero, quarter.CountsAt!.Value.Offset);
+        Assert.Equal(expected, quarter.UpdatedAt);
+        Assert.Equal(TimeSpan.Zero, quarter.UpdatedAt!.Value.Offset);
+    }
+
+    [Fact]
+    public async Task ReadsAFractionOfASecond()
+    {
+        var host = new FixtureHost();
+        host.AddQuarter("2026Q3")["counts_at"] = "2026-09-27T06:49:02.25Z";
+        using var client = host.CreateClient();
+
+        var quarter = Assert.Single(await client.Data.GetQuartersAsync());
+
+        Assert.Equal(new DateTimeOffset(2026, 9, 27, 6, 49, 2, 250, TimeSpan.Zero), quarter.CountsAt);
+    }
+
     [Fact]
     public async Task KeepsAbsentApartFromNull()
     {
@@ -144,21 +179,31 @@ public class ManifestTests
         using var empty = new FixtureHost().CreateClient();
 
         Assert.Empty(await empty.Data.GetQuartersAsync());
+
+        var listless = new FixtureHost();
+        listless.Manifest.Remove("quarters");
+        using var none = listless.CreateClient();
+
+        Assert.Empty(await none.Data.GetQuartersAsync());
     }
 
     [Theory]
-    [InlineData("2.0")]
-    [InlineData("")]
-    [InlineData("one")]
+    [InlineData("\"2.0\"")]
+    [InlineData("\"\"")]
+    [InlineData("\"one\"")]
+    [InlineData("2")]
+    [InlineData("1.2")]
+    [InlineData("null")]
     [InlineData(null)]
-    public async Task RefusesAnotherMajor(string? version)
+    public async Task RefusesAnotherMajor(string? json)
     {
+        // The version as it appears in the manifest's JSON; null leaves the key out.
         var host = new FixtureHost();
         host.AddQuarter("2026Q3");
         host.Manifest.Remove("schema_version");
-        if (version is not null)
+        if (json is not null)
         {
-            host.Manifest["schema_version"] = version;
+            host.Manifest["schema_version"] = JsonNode.Parse(json);
         }
 
         using var client = host.CreateClient();
@@ -185,31 +230,38 @@ public class ManifestTests
     [Fact]
     public async Task RefusesWhatIsNotAManifest()
     {
-        var html = new FixtureHost
-        {
-            OnRequest = _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html>") },
-        };
-        await AssertMalformed(html);
+        await AssertMalformedJson(Serving("<html>"));
+        await AssertMalformedJson(Serving("[]"));
+        await AssertMalformed(Serving("null"));
 
         var textual = new FixtureHost();
         textual.Manifest["quarters"] = "x";
-        await AssertMalformed(textual);
+        await AssertMalformedJson(textual);
+
+        var nulled = new FixtureHost();
+        nulled.Manifest["quarters"] = null;
+        await AssertMalformedJson(nulled);
+
+        var holed = new FixtureHost();
+        holed.AddQuarter("2026Q3");
+        holed.Manifest["quarters"]!.AsArray().Add(null);
+        await AssertMalformed(holed);
 
         var unnamed = new FixtureHost();
         unnamed.AddQuarter("2026Q3").Remove("quarter");
-        await AssertMalformed(unnamed);
+        await AssertMalformedJson(unnamed);
 
         var misnamed = new FixtureHost();
         misnamed.AddQuarter("2026Q3")["quarter"] = "2026Q5";
-        await AssertMalformed(misnamed);
+        await AssertMalformedJson(misnamed);
 
         var misdated = new FixtureHost();
         misdated.AddQuarter("2026Q3")["cycle_date"] = "30/09/2026";
-        await AssertMalformed(misdated);
+        await AssertMalformedJson(misdated);
 
-        var listless = new FixtureHost();
-        listless.Manifest.Remove("quarters");
-        await AssertMalformed(listless);
+        var mistimed = new FixtureHost();
+        mistimed.AddQuarter("2026Q3")["counts_at"] = "yesterday";
+        await AssertMalformedJson(mistimed);
 
         var newer = new FixtureHost();
         newer.Manifest["schema_version"] = "2.0";
@@ -219,11 +271,26 @@ public class ManifestTests
         await Assert.ThrowsAsync<UnsupportedSchemaException>(() => client.Data.GetQuartersAsync());
     }
 
-    private static async Task AssertMalformed(FixtureHost host)
+    // A host whose manifest is the text given.
+    private static FixtureHost Serving(string body)
+    {
+        return new FixtureHost
+        {
+            OnRequest = _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) },
+        };
+    }
+
+    private static async Task<DataIntegrityException> AssertMalformed(FixtureHost host)
     {
         using var client = host.CreateClient();
 
-        var e = await Assert.ThrowsAsync<DataIntegrityException>(() => client.Data.GetQuartersAsync());
+        return await Assert.ThrowsAsync<DataIntegrityException>(() => client.Data.GetQuartersAsync());
+    }
+
+    // Malformed, and the serializer's own error is kept inside.
+    private static async Task AssertMalformedJson(FixtureHost host)
+    {
+        var e = await AssertMalformed(host);
 
         Assert.IsType<System.Text.Json.JsonException>(e.InnerException);
     }

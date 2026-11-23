@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 namespace QuarterCall.Internal;
 
@@ -25,7 +26,35 @@ internal static class SchemaVersion
         var found = published is null
             ? "does not say which version it is"
             : $"is version \"{published}\"";
-        throw new UnsupportedSchemaException(
+        throw Refused(major, document, found);
+    }
+
+    /// <summary>
+    /// Throws unless <paramref name="published"/> is a JSON string holding <paramref name="major"/>, a dot and a
+    /// minor. A version that is not a string, a number included, is refused as a version.
+    /// </summary>
+    /// <param name="published">The document's <c>schema_version</c>; undefined when the key is absent.</param>
+    /// <param name="major">The major version this package reads.</param>
+    /// <param name="document">What the document is, for the message, such as "the manifest at …".</param>
+    /// <exception cref="UnsupportedSchemaException">The version is not one of <paramref name="major"/>.</exception>
+    public static void Require(JsonElement published, int major, string document)
+    {
+        switch (published.ValueKind)
+        {
+            case JsonValueKind.String:
+                Require(published.GetString(), major, document);
+                return;
+            case JsonValueKind.Undefined or JsonValueKind.Null:
+                Require((string?)null, major, document);
+                return;
+            default:
+                throw Refused(major, document, "does not give its version as text, such as \"1.2\"");
+        }
+    }
+
+    private static UnsupportedSchemaException Refused(int major, string document, string found)
+    {
+        return new UnsupportedSchemaException(
             $"This version of QuarterCall reads version {major} of {document}, and the one published {found}. "
             + "To read it, upgrade the QuarterCall package.");
     }
