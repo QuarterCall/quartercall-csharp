@@ -13,8 +13,9 @@ namespace QuarterCall.Internal;
 /// </summary>
 /// <remarks>
 /// Its columns are the file's top-level columns of one value a row; a nested or repeated column is not one of them.
-/// Every column is read through Parquet.Net's nullable form, which reads a column the file declares nullable and one
-/// it does not alike. Any failure of Parquet.Net but a cancellation is an <see cref="UnsupportedSchemaException"/>
+/// Each column is read in the form its declaration calls for: a column the file declares optional through
+/// Parquet.Net's nullable form, and one it declares required through its plain form. Any failure of Parquet.Net but a
+/// cancellation is an <see cref="UnsupportedSchemaException"/>
 /// with Parquet.Net's exception inside: the file matched the manifest, so a file that cannot be read is in a form
 /// this version of the package does not read.
 /// </remarks>
@@ -149,7 +150,14 @@ internal sealed class ParquetTable : IAsyncDisposable
         var values = Buffer<T>(column).AsMemory(0, _rows);
         try
         {
-            await group.ReadAsync<T>(field, values, cancellationToken: ct).ConfigureAwait(false);
+            if (field.IsNullable)
+            {
+                await group.ReadAsync<T>(field, values, cancellationToken: ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await ReadRequiredAsync(group, field, values, ct).ConfigureAwait(false);
+            }
         }
         catch (Exception e) when (IsParquetFailure(e))
         {
@@ -208,6 +216,39 @@ internal sealed class ParquetTable : IAsyncDisposable
         catch (Exception e) when (IsParquetFailure(e))
         {
             throw Unreadable(e);
+        }
+    }
+
+    // Reads a column the file declares required through Parquet.Net's plain form, into an array rented for the read,
+    // and copies it into values. Parquet.Net's nullable form must not read such a column: it takes each row's
+    // definition level from an array it rents and does not clear, and a required column has no levels to write there,
+    // so a row whose slot holds a negative number an earlier user left is read as null, and every value after it moves
+    // up a row. A process's first reads find clean arrays; later ones need not.
+    private static async Task ReadRequiredAsync<T>(
+        ParquetRowGroupReader group, DataField field, Memory<T?> values, CancellationToken ct)
+        where T : struct
+    {
+        var rows = values.Length;
+        var plain = ArrayPool<T>.Shared.Rent(rows);
+        try
+        {
+            await group.ReadAsync<T>(field, plain.AsMemory(0, rows), cancellationToken: ct).ConfigureAwait(false);
+            Lift(plain.AsSpan(0, rows), values.Span);
+        }
+        finally
+        {
+            // An array of references is cleared, so that the pool keeps none of the file's values alive.
+            ArrayPool<T>.Shared.Return(plain, RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+        }
+    }
+
+    // Copies a required column's values into the nullable form the table lends every column in.
+    private static void Lift<T>(ReadOnlySpan<T> from, Span<T?> to)
+        where T : struct
+    {
+        for (var row = 0; row < from.Length; row++)
+        {
+            to[row] = from[row];
         }
     }
 

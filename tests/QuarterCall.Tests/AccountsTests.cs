@@ -67,6 +67,42 @@ public sealed class AccountsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadsTheRowsAsWrittenOnEveryRead()
+    {
+        // Four row groups of a size a published file has, its required columns declared as the published file
+        // declares them, read again and again in one process, as an analyst's session reads a quarter.
+        const int codes = 1103;
+        const int charters = 80;
+        var rows = ManyRows(charters, codes);
+        var host = Publish(EvidenceFiles.Accounts(rows, rowsPerGroup: 20 * codes));
+        using var client = Client(host, Path.Combine(_root, "cache"));
+        int[] cuNumbers = [1, charters / 2, charters];
+        string[] picked = ["A0000", "A0551", "A1102"];
+        (string Name, AccountFilter? Filter, Func<AccountRow, bool> Keeps)[] reads =
+        [
+            ("by Codes", new() { Codes = picked }, row => picked.Contains(row.AccountCode)),
+            ("by CuNumbers", new() { CuNumbers = cuNumbers }, row => cuNumbers.Contains(row.CuNumber)),
+            ("by both", new() { Codes = picked, CuNumbers = cuNumbers },
+                row => picked.Contains(row.AccountCode) && cuNumbers.Contains(row.CuNumber)),
+            ("unfiltered", null, _ => true),
+        ];
+
+        for (var round = 0; round < 6; round++)
+        {
+            foreach (var (name, filter, keeps) in reads)
+            {
+                var expected = rows.Where(keeps).Select(ToAccount).ToList();
+                // A full collection before each read, as a long session has between its reads: memory it frees
+                // can hold a buffer made after it, and such a buffer is not cleared.
+                GC.Collect();
+                var read = await ReadAsync(client, filter);
+
+                Assert.True(expected.SequenceEqual(read), $"round {round}, {name}: the rows differ from those written");
+            }
+        }
+    }
+
+    [Fact]
     public async Task ReadsAFileWithoutARowAsAnEmptyStream()
     {
         var host = Publish(EvidenceFiles.Accounts([]));
@@ -545,6 +581,31 @@ public sealed class AccountsTests : IDisposable
     private static Account[] Expected(params int[] rows)
     {
         return [.. rows.Select(row => ToAccount(Rows[row]))];
+    }
+
+    // A row for each of codes for each charter, charter by charter, as the published file orders them. Every column
+    // but quarter and cycle_date varies from charter to charter, and the optional ones hold nulls, so that a value
+    // read into another row shows.
+    private static AccountRow[] ManyRows(int charters, int codes)
+    {
+        var rows = new AccountRow[charters * codes];
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var charter = (index / codes) + 1;
+            var code = index % codes;
+            rows[index] = new AccountRow(
+                "2026Q3",
+                CycleDate,
+                charter,
+                900_000L + charter,
+                (short)((charter % 3) + 1),
+                "A" + code.ToString("D4", CultureInfo.InvariantCulture),
+                code % 10 == 3 ? null : (index * 7) + 0.5m,
+                IngestedAt.AddSeconds(charter),
+                charter % 7 == 0 ? null : charter + 10_000);
+        }
+
+        return rows;
     }
 
     private static FixtureHost Publish(byte[] body)

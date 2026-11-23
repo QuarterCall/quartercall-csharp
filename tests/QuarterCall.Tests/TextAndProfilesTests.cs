@@ -206,6 +206,39 @@ public sealed class TextAndProfilesTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadsTheProfilesAsWrittenOnEveryRead()
+    {
+        // Three row groups of a size an accounts file has, quarter declared required as the published file declares
+        // it, read again and again in one process, with and without a filter.
+        const int count = 66_180;
+        var rows = Enumerable.Range(1, count).Select(ManyProfiles).ToArray();
+        var host = PublishProfiles(EvidenceFiles.Profiles(rows, Ncua, rowsPerGroup: count / 3));
+        using var client = Client(host);
+        int[] cuNumbers = [1, count / 2, count];
+        int[] cuids = [8, (count / 2) + 7];
+        (string Name, ProfileFilter? Filter, Func<ProfileRow, bool> Keeps)[] reads =
+        [
+            ("by CuNumbers", new() { CuNumbers = cuNumbers }, row => cuNumbers.Contains(row.CuNumber!.Value)),
+            ("by Cuids", new() { Cuids = cuids }, row => row.Cuid is { } cuid && cuids.Contains(cuid)),
+            ("unfiltered", null, _ => true),
+        ];
+
+        for (var round = 0; round < 6; round++)
+        {
+            foreach (var (name, filter, keeps) in reads)
+            {
+                var expected = rows.Where(keeps).Select(Fields).ToList();
+                // A full collection before each read, as a long session has between its reads: memory it frees
+                // can hold a buffer made after it, and such a buffer is not cleared.
+                GC.Collect();
+                var read = (await ReadProfilesAsync(client, filter)).Select(Fields).ToList();
+
+                Assert.True(expected.SequenceEqual(read), $"round {round}, {name}: the rows differ from those written");
+            }
+        }
+    }
+
+    [Fact]
     public async Task ObservedAtIsUtcAndKeepsTheWallClock()
     {
         var host = PublishProfiles(EvidenceFiles.Profiles(ProfileRows, Ncua));
@@ -510,6 +543,65 @@ public sealed class TextAndProfilesTests : IDisposable
                 ["acct_892a"] = acct,
             },
         };
+    }
+
+    // The profile of charter cuNumber, whose columns all vary from charter to charter but quarter and cycle_date, and
+    // whose optional ones hold nulls.
+    private static ProfileRow ManyProfiles(int cuNumber)
+    {
+        string[] states = ["TX", "CA", "NY", "OH"];
+        return new ProfileRow(
+            "2026Q3",
+            CycleDate,
+            cuNumber,
+            cuNumber % 5 == 0 ? null : cuNumber + 7,
+            900_000L + cuNumber,
+            (short)((cuNumber % 4) + 1),
+            new DateTime(2026, 7, 14, 9, 30, 0, DateTimeKind.Utc).AddSeconds(cuNumber),
+            cuNumber % 2 == 0 ? "first_seen" : "filed")
+        {
+            Values = new Dictionary<string, object?>
+            {
+                ["credit_union_name"] = $"CU {cuNumber}",
+                ["state"] = cuNumber % 9 == 0 ? null : states[cuNumber % states.Length],
+                ["acct_892a"] = cuNumber % 3 == 0 ? null : cuNumber,
+            },
+        };
+    }
+
+    // Every field of a profile as written, and as read.
+    private static string Fields(ProfileRow row)
+    {
+        return string.Join(
+            '|',
+            row.Quarter,
+            row.CycleDate,
+            row.CuNumber,
+            row.Cuid,
+            row.SubmissionId,
+            row.Version,
+            row.ObservedAt.Ticks,
+            row.ObservedAtSource,
+            row.Values["credit_union_name"],
+            row.Values["state"],
+            row.Values["acct_892a"]);
+    }
+
+    private static string Fields(FilingProfile profile)
+    {
+        return string.Join(
+            '|',
+            profile.Quarter,
+            profile.CycleDate,
+            profile.CuNumber,
+            profile.Cuid,
+            profile.SubmissionId,
+            profile.Version,
+            profile.ObservedAt.UtcTicks,
+            profile.ObservedAtSource,
+            profile.GetString("credit_union_name"),
+            profile.GetString("state"),
+            profile.GetInt32("acct_892a"));
     }
 
     private static AccountText ToText(AccountTextRow row)

@@ -51,7 +51,9 @@ public sealed class DataClient
     /// <remarks>
     /// Nothing is requested until the enumeration begins, and each enumeration reads the manifest and the file
     /// afresh. When it ends, whether at its last row, at a <c>break</c>, at a cancellation or at an error, the file is
-    /// closed, and a file downloaded without a cache is deleted.
+    /// closed, and a file downloaded without a cache is deleted. A null in a column the record requires, which only a
+    /// column the file declares optional can hold, is refused when its row is built, so a row the filter does not
+    /// select is not checked for one.
     /// </remarks>
     /// <param name="quarter">The quarter.</param>
     /// <param name="filter">
@@ -110,7 +112,9 @@ public sealed class DataClient
     /// afresh. The file is downloaded whole and verified against the manifest, as <see cref="DownloadAsync"/>
     /// verifies it, and a cache is used in the same way when <see cref="QuarterCallOptions.CacheDirectory"/> is set.
     /// It is read one row group at a time. When the enumeration ends, whether at its last row, at a <c>break</c>, at
-    /// a cancellation or at an error, the file is closed, and a file downloaded without a cache is deleted.
+    /// a cancellation or at an error, the file is closed, and a file downloaded without a cache is deleted. A null in
+    /// a column the record requires, which only a column the file declares optional can hold, is refused when its row
+    /// is built, so a row the filter does not select is not checked for one.
     /// </remarks>
     /// <param name="quarter">The quarter.</param>
     /// <param name="filter">
@@ -170,7 +174,9 @@ public sealed class DataClient
     /// afresh. The file is downloaded whole and verified against the manifest, as <see cref="DownloadAsync"/>
     /// verifies it, and a cache is used in the same way when <see cref="QuarterCallOptions.CacheDirectory"/> is set.
     /// It is read one row group at a time. When the enumeration ends, whether at its last row, at a <c>break</c>, at
-    /// a cancellation or at an error, the file is closed, and a file downloaded without a cache is deleted.
+    /// a cancellation or at an error, the file is closed, and a file downloaded without a cache is deleted. A null in
+    /// a column the record requires, which only a column the file declares optional can hold, is refused when its row
+    /// is built, so a row the filter does not select is not checked for one.
     /// </remarks>
     /// <param name="quarter">The quarter.</param>
     /// <param name="filter">
