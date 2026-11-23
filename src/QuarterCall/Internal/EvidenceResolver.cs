@@ -157,7 +157,7 @@ internal sealed class EvidenceResolver
     private async Task<PublishedFile> SaveFileAsync(FileRef file, string path, CancellationToken ct)
     {
         await _files.SaveAsync(file, path, ct).ConfigureAwait(false);
-        return new PublishedFile(file.Uri, file.Sha256, file.Bytes, path);
+        return new PublishedFile { Uri = file.Uri, Sha256 = file.Sha256, Bytes = file.Bytes, Path = path };
     }
 
     // The table's file in the quarter's entry; null only for the text of a quarter that has none.
