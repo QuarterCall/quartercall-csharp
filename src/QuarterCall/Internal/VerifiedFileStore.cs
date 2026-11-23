@@ -33,6 +33,7 @@ internal sealed class VerifiedFileStore
 
     private readonly HostClient _host;
     private readonly string? _cacheDirectory;
+    private readonly string? _temporaryDirectory;
 
     // What of a download differs from the manifest.
     private enum Measure
@@ -44,16 +45,19 @@ internal sealed class VerifiedFileStore
     /// <summary>Creates a store that downloads from <paramref name="host"/>.</summary>
     /// <param name="host">The host the files are on.</param>
     /// <param name="cacheDirectory">Where to keep verified files between reads, or null to keep none.</param>
-    public VerifiedFileStore(HostClient host, string? cacheDirectory)
+    /// <param name="temporaryDirectory">
+    /// Where a file fetched without a cache is kept while it is read, or null for the system's temporary directory.
+    /// </param>
+    public VerifiedFileStore(HostClient host, string? cacheDirectory, string? temporaryDirectory = null)
     {
         _host = host;
         _cacheDirectory = cacheDirectory;
+        _temporaryDirectory = temporaryDirectory;
     }
 
     /// <summary>
     /// A verified copy of <paramref name="file"/> to read: the cached one when it can be read and still matches, or
-    /// else one just downloaded, into the cache when there is one and into the system's temporary directory when
-    /// not.
+    /// else one just downloaded, into the cache when there is one and into the temporary directory when not.
     /// </summary>
     /// <exception cref="DataIntegrityException">
     /// The download does not match <paramref name="file"/>: its length or its digest differs, or it broke off. The
@@ -70,7 +74,7 @@ internal sealed class VerifiedFileStore
         if (_cacheDirectory is null)
         {
             var name = $"{ScratchPrefix}{Guid.NewGuid():N}{Extension(file.Uri)}";
-            var scratch = Path.Combine(Path.GetTempPath(), name);
+            var scratch = Path.Combine(_temporaryDirectory ?? Path.GetTempPath(), name);
             await DownloadAsync(file, scratch, ct).ConfigureAwait(false);
             return new VerifiedFile(scratch, FileKeeper.None);
         }

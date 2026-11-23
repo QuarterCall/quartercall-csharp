@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using QuarterCall.Internal;
 
 namespace QuarterCall;
@@ -11,10 +12,11 @@ public sealed class DataClient
     private readonly ManifestReader _manifest;
     private readonly EvidenceResolver _evidence;
 
-    internal DataClient(HostClient host, string? cacheDirectory)
+    internal DataClient(HostClient host, string? cacheDirectory, string? temporaryDirectory)
     {
         _manifest = new ManifestReader(host);
-        _evidence = new EvidenceResolver(_manifest, new VerifiedFileStore(host, cacheDirectory), host);
+        var files = new VerifiedFileStore(host, cacheDirectory, temporaryDirectory);
+        _evidence = new EvidenceResolver(_manifest, files, host);
     }
 
     /// <summary>
@@ -37,6 +39,66 @@ public sealed class DataClient
     {
         var snapshot = await _manifest.ReadAsync(cancellationToken).ConfigureAwait(false);
         return snapshot.Quarters;
+    }
+
+    /// <summary>
+    /// Reads a quarter's account values, one <see cref="Account"/> for each row of its accounts file, in the file's
+    /// order. The file is downloaded whole and verified against the manifest, as <see cref="DownloadAsync"/> verifies
+    /// it, and a cache is used in the same way when <see cref="QuarterCallOptions.CacheDirectory"/> is set. It is then
+    /// read one row group at a time, so a whole quarter streams in memory that does not grow with it. A filter
+    /// reduces the rows returned, not the download.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is requested until the enumeration begins, and each enumeration reads the manifest and the file
+    /// afresh. When it ends, whether at its last row, at a <c>break</c>, at a cancellation or at an error, the file is
+    /// closed, and a file downloaded without a cache is deleted.
+    /// </remarks>
+    /// <param name="quarter">The quarter.</param>
+    /// <param name="filter">
+    /// Which rows to return; every row when null. An empty set returns none, but the quarter must still be published.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Cancels the read, as a token given to <c>WithCancellation</c> also does.
+    /// </param>
+    /// <returns>The quarter's rows, as the file holds them.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown by this call, before any request: <paramref name="quarter"/> is the default quarter, or a code in the
+    /// filter is null or empty, or a charter number or cuid in it is less than 1.
+    /// </exception>
+    /// <exception cref="DataUnavailableException">
+    /// While enumerating: the manifest does not list the quarter as readable.
+    /// </exception>
+    /// <exception cref="DataIntegrityException">
+    /// While enumerating: the file did not match the manifest in three attempts, most often because the quarter is
+    /// being republished; or the manifest names no usable digest or length for the file, or a path that is not
+    /// beneath the data address; or the manifest is not in its published form.
+    /// </exception>
+    /// <exception cref="UnsupportedSchemaException">
+    /// While enumerating: the manifest is of a schema version this version of the package does not read, or the file
+    /// is in a form it does not read: it lacks a column, holds one as another type or holds a null where a value is
+    /// required, or is not a Parquet file it can read.
+    /// </exception>
+    /// <exception cref="HttpRequestException">
+    /// While enumerating: a request failed, or the host answered with an error.
+    /// </exception>
+    /// <exception cref="TaskCanceledException">
+    /// While enumerating: a request took longer than <see cref="QuarterCallOptions.Timeout"/>; a
+    /// <see cref="TimeoutException"/> is inside.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// While enumerating: <paramref name="cancellationToken"/>, or the token given to <c>WithCancellation</c>, was
+    /// cancelled.
+    /// </exception>
+    /// <exception cref="IOException">While enumerating: the file could not be written or read on disk.</exception>
+    /// <exception cref="UnauthorizedAccessException">
+    /// While enumerating: the process may not write the file in the cache or the temporary directory.
+    /// </exception>
+    public IAsyncEnumerable<Account> ReadAccountsAsync(
+        Quarter quarter, AccountFilter? filter = null, CancellationToken cancellationToken = default)
+    {
+        quarter.ThrowIfDefault(nameof(quarter));
+        var rows = AccountRows.Select(filter, nameof(filter));
+        return StreamAccountsAsync(quarter, rows, cancellationToken);
     }
 
     /// <summary>
@@ -133,6 +195,39 @@ public sealed class DataClient
     {
         ThrowIfNotAFile(path);
         return _evidence.SaveIndexAsync(path, cancellationToken);
+    }
+
+    // One enumeration's read of the quarter's accounts file. The file, its reader and its buffers are released when
+    // the enumeration ends, however it ends. ct is the call's token joined to WithCancellation's.
+    private async IAsyncEnumerable<Account> StreamAccountsAsync(
+        Quarter quarter, AccountRows rows, [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (rows.SelectsNone)
+        {
+            // No row is selected, but a quarter that is not published is still refused: the manifest is read, and
+            // no file.
+            _ = await _evidence.IsPublishedAsync(quarter, EvidenceTable.Accounts, ct).ConfigureAwait(false);
+            yield break;
+        }
+
+        var file = await _evidence.OpenAsync(quarter, EvidenceTable.Accounts, ct).ConfigureAwait(false);
+        if (file is null)
+        {
+            // Only a quarter's text may be absent without an error; the manifest always names its accounts.
+            yield break;
+        }
+
+        await using (file.ConfigureAwait(false))
+        {
+            var table = await ParquetTable.OpenAsync(file, ct).ConfigureAwait(false);
+            await using (table.ConfigureAwait(false))
+            {
+                await foreach (var account in rows.ReadAsync(table, ct).ConfigureAwait(false))
+                {
+                    yield return account;
+                }
+            }
+        }
     }
 
     // A path to write must name a file. Checked at the call, before any request.

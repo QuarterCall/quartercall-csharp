@@ -27,4 +27,10 @@ public sealed class QuarterCallOptions
     /// <see cref="TaskCanceledException"/> holding a <see cref="TimeoutException"/>.
     /// </summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(DefaultTimeoutSeconds);
+
+    /// <summary>
+    /// Where a file read without a cache is kept while it is read, or null for the system's temporary directory. A
+    /// test sets it to a directory of its own, to see every file a read leaves there.
+    /// </summary>
+    internal string? TemporaryDirectory { get; init; }
 }

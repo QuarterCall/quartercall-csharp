@@ -65,12 +65,20 @@ internal sealed class FixtureHost : HttpMessageHandler
         }
     }
 
-    /// <summary>A client of this host, its cache in <paramref name="cacheDirectory"/>.</summary>
-    public QuarterCallClient CreateClient(string? cacheDirectory = null)
+    /// <summary>
+    /// A client of this host, its cache in <paramref name="cacheDirectory"/>, keeping a file it reads without a cache
+    /// in <paramref name="temporaryDirectory"/>, or in the system's temporary directory when that is null.
+    /// </summary>
+    public QuarterCallClient CreateClient(string? cacheDirectory = null, string? temporaryDirectory = null)
     {
         // The client's own timeout is the one under test, so the HttpClient sets none.
         var http = new HttpClient(this, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
-        var options = new QuarterCallOptions { DataBaseAddress = BaseAddress, CacheDirectory = cacheDirectory };
+        var options = new QuarterCallOptions
+        {
+            DataBaseAddress = BaseAddress,
+            CacheDirectory = cacheDirectory,
+            TemporaryDirectory = temporaryDirectory,
+        };
         return new QuarterCallClient(http, options);
     }
 

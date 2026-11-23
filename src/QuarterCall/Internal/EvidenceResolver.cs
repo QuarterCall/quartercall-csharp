@@ -56,6 +56,24 @@ internal sealed class EvidenceResolver
     }
 
     /// <summary>
+    /// Whether the <paramref name="table"/> file of <paramref name="quarter"/> is published, from a fresh reading of
+    /// the manifest and without downloading anything. False exactly where <see cref="OpenAsync"/> gives null: for
+    /// the text of a quarter without text values.
+    /// </summary>
+    /// <exception cref="DataUnavailableException">
+    /// The manifest does not list the quarter as readable, or names no file for the table in it.
+    /// </exception>
+    /// <exception cref="DataIntegrityException">
+    /// The manifest names no usable digest or length for the file, or a path that is not beneath the base address;
+    /// or the manifest is malformed.
+    /// </exception>
+    public async Task<bool> IsPublishedAsync(Quarter quarter, EvidenceTable table, CancellationToken ct)
+    {
+        var snapshot = await _manifest.ReadAsync(ct).ConfigureAwait(false);
+        return Find(snapshot, quarter, table) is not null;
+    }
+
+    /// <summary>
     /// Saves a verified copy of the <paramref name="table"/> file of <paramref name="quarter"/> at
     /// <paramref name="path"/>.
     /// </summary>
