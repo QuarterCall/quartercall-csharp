@@ -15,7 +15,9 @@ public sealed class QuarterCallOptions
     public Uri DataBaseAddress { get; init; } = new(PublicDataAddress);
 
     /// <summary>
-    /// A directory in which to keep downloaded files between runs, or null to keep none.
+    /// A directory in which to keep downloaded files between runs, or null to keep none. A relative path is taken
+    /// from the working directory when the client is built; an empty or blank one is refused. The directory is
+    /// created when first used. Each file in it is named by its SHA-256 digest, and the client removes none.
     /// </summary>
     public string? CacheDirectory { get; init; }
 

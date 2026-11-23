@@ -27,7 +27,9 @@ public sealed class QuarterCallClient : IDisposable
     /// <summary>Creates a client with its own connections, configured by <paramref name="options"/>.</summary>
     /// <param name="options">Where to read from, and how long to wait.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
-    /// <exception cref="ArgumentException">The data base address is not an absolute http or https address.</exception>
+    /// <exception cref="ArgumentException">
+    /// The data base address is not an absolute http or https address, or the cache directory is empty or blank.
+    /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The timeout is neither more than zero and at most 24 days, nor infinite.
     /// </exception>
@@ -35,7 +37,7 @@ public sealed class QuarterCallClient : IDisposable
     {
         Validate(options);
         _ownedHttp = CreateHttpClient();
-        Data = new DataClient(CreateHost(_ownedHttp, options), options.CacheDirectory);
+        Data = new DataClient(CreateHost(_ownedHttp, options), FullCacheDirectory(options));
     }
 
     /// <summary>
@@ -45,7 +47,9 @@ public sealed class QuarterCallClient : IDisposable
     /// <param name="httpClient">The client to send through, such as one from <c>IHttpClientFactory</c>.</param>
     /// <param name="options">Where to read from, and how long to wait; the defaults when null.</param>
     /// <exception cref="ArgumentNullException"><paramref name="httpClient"/> is null.</exception>
-    /// <exception cref="ArgumentException">The data base address is not an absolute http or https address.</exception>
+    /// <exception cref="ArgumentException">
+    /// The data base address is not an absolute http or https address, or the cache directory is empty or blank.
+    /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The timeout is neither more than zero and at most 24 days, nor infinite.
     /// </exception>
@@ -54,7 +58,7 @@ public sealed class QuarterCallClient : IDisposable
         ArgumentNullException.ThrowIfNull(httpClient);
         options ??= new QuarterCallOptions();
         Validate(options);
-        Data = new DataClient(CreateHost(httpClient, options), options.CacheDirectory);
+        Data = new DataClient(CreateHost(httpClient, options), FullCacheDirectory(options));
     }
 
     /// <summary>The evidence: the filings as the data host publishes them.</summary>
@@ -92,6 +96,20 @@ public sealed class QuarterCallClient : IDisposable
                 $"The timeout must be more than zero and at most {MaxTimeoutDays} days, "
                 + "or Timeout.InfiniteTimeSpan for none.");
         }
+
+        if (options.CacheDirectory is { } cache && string.IsNullOrWhiteSpace(cache))
+        {
+            throw new ArgumentException(
+                $"The cache directory must name a directory, or be null to keep no cache; it is \"{cache}\".",
+                nameof(options));
+        }
+    }
+
+    // A relative cache directory is taken from the working directory now, so that a later change of the working
+    // directory does not move the cache.
+    private static string? FullCacheDirectory(QuarterCallOptions options)
+    {
+        return options.CacheDirectory is { } cache ? Path.GetFullPath(cache) : null;
     }
 
     private static HttpClient CreateHttpClient()

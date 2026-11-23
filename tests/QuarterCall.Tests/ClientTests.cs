@@ -5,6 +5,8 @@ using Xunit;
 
 namespace QuarterCall.Tests;
 
+// One test here changes the process's working directory, so the class runs alone, after every other.
+[Collection(WorkingDirectoryCollection.Name)]
 public class ClientTests
 {
     // Long enough that a test which passes never waits for it, short enough that one which fails ends.
@@ -143,6 +145,53 @@ public class ClientTests
         Assert.Contains("at most 24 days", e.Message);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RefusesABlankCacheDirectory(string cacheDirectory)
+    {
+        var options = new QuarterCallOptions { CacheDirectory = cacheDirectory };
+        using var http = new HttpClient();
+
+        var owned = Assert.Throws<ArgumentException>(() => new QuarterCallClient(options));
+        var supplied = Assert.Throws<ArgumentException>(() => new QuarterCallClient(http, options));
+
+        Assert.Equal("options", owned.ParamName);
+        Assert.Equal("options", supplied.ParamName);
+        // Null still means no cache.
+        using var uncached = new QuarterCallClient(new QuarterCallOptions { CacheDirectory = null });
+    }
+
+    [Fact]
+    public async Task KeepsARelativeCacheWhereItWasNamed()
+    {
+        var host = new FixtureHost();
+        var body = new byte[] { 1, 2, 3, 4 };
+        host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var named = Directory.CreateTempSubdirectory("client-tests-").FullName;
+        var later = Directory.CreateTempSubdirectory("client-tests-").FullName;
+        var original = Directory.GetCurrentDirectory();
+        try
+        {
+            Directory.SetCurrentDirectory(named);
+            using var client = host.CreateClient("cache");
+            Directory.SetCurrentDirectory(later);
+
+            await client.Data.DownloadAsync(
+                Quarter.Parse("2026Q3"), EvidenceTable.Accounts, Path.Combine(later, "accounts.parquet"));
+
+            // The cache is beneath the directory that was current when the client was built.
+            Assert.Single(Directory.GetFiles(Path.Combine(named, "cache")));
+            Assert.False(Directory.Exists(Path.Combine(later, "cache")));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+            Directory.Delete(named, recursive: true);
+            Directory.Delete(later, recursive: true);
+        }
+    }
+
     [Fact]
     public void DefaultsToThePublicHost()
     {
@@ -152,4 +201,12 @@ public class ClientTests
         Assert.Equal(TimeSpan.FromSeconds(100), options.Timeout);
         Assert.Null(options.CacheDirectory);
     }
+}
+
+/// <summary>Tests that must not run beside any other, such as one that changes the working directory.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class WorkingDirectoryCollection
+{
+    /// <summary>The collection's name.</summary>
+    public const string Name = "Working directory";
 }

@@ -39,6 +39,12 @@ internal sealed class FixtureHost : HttpMessageHandler
     /// <summary>How long each request waits before it is answered, on the request's own cancellation token.</summary>
     public TimeSpan? Delay { get; set; }
 
+    /// <summary>
+    /// Awaited before each request is answered, after <see cref="Delay"/> and on the request's own cancellation token:
+    /// a test holds requests here until it releases them.
+    /// </summary>
+    public Func<HttpRequestMessage, CancellationToken, Task>? Hold { get; set; }
+
     /// <summary>Every request received, in order, with its <c>User-Agent</c>, or null when it had none.</summary>
     public List<(Uri Uri, string? UserAgent)> Requests { get; } = [];
 
@@ -137,6 +143,11 @@ internal sealed class FixtureHost : HttpMessageHandler
         if (Delay is { } delay)
         {
             await Task.Delay(delay, cancellationToken);
+        }
+
+        if (Hold is { } hold)
+        {
+            await hold(request, cancellationToken);
         }
 
         return OnRequest?.Invoke(request) ?? Answer(uri);

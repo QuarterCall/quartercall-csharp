@@ -54,8 +54,8 @@ internal sealed class HostClient
     /// <param name="relativePath">A path relative to the base address, as the manifest writes it.</param>
     /// <exception cref="DataIntegrityException">
     /// The path is not relative, or leads out from beneath the base address: it is empty, or has a scheme, a host, a
-    /// query, a fragment, a leading <c>/</c>, a backslash or a <c>..</c> segment, or the address composed from it
-    /// is not beneath the base address.
+    /// query, a fragment, a leading <c>/</c>, a backslash, white space, a control character or a <c>..</c> segment,
+    /// or the address composed from it is not beneath the base address.
     /// </exception>
     public Uri Resolve(string relativePath)
     {
@@ -74,7 +74,7 @@ internal sealed class HostClient
             throw NotRelative(relativePath, e);
         }
 
-        // The form alone is not enough: Uri trims leading white space, so " //host/x" names another host.
+        // A second guard, should the form rule ever miss a way out: the composed address must start with the base's.
         if (!uri.AbsoluteUri.StartsWith(_root, StringComparison.Ordinal))
         {
             throw NotRelative(relativePath, inner: null);
@@ -134,7 +134,10 @@ internal sealed class HostClient
     private static bool HasRelativeForm(string path)
     {
         var plain = Uri.UnescapeDataString(path);
-        if (plain.Length == 0 || plain[0] == Separator || plain.AsSpan().ContainsAny(RefusedMarks))
+        if (plain.Length == 0
+            || plain[0] == Separator
+            || plain.AsSpan().ContainsAny(RefusedMarks)
+            || HasSpaceOrControl(plain))
         {
             return false;
         }
@@ -149,12 +152,27 @@ internal sealed class HostClient
         return !plain.Split(Separator).Contains(ParentSegment);
     }
 
+    // A published path holds no white space or control character. Uri trims some of them, and so would compose the
+    // address of a path other than the one judged: " ../x" is read as "../x".
+    private static bool HasSpaceOrControl(string path)
+    {
+        foreach (var c in path)
+        {
+            if (char.IsWhiteSpace(c) || char.IsControl(c))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private DataIntegrityException NotRelative(string path, UriFormatException? inner)
     {
         var message = $"The manifest names \"{path}\" as the path of a file, but a path must be relative to the "
             + $"data address, {_root}, and stay beneath it: no scheme, host, query, fragment, leading slash, "
-            + "backslash or \"..\" segment. Nothing was requested from it. Check that the data address points to a "
-            + "QuarterCall data host.";
+            + "backslash, white space, control character or \"..\" segment. Nothing was requested from it. Check "
+            + "that the data address points to a QuarterCall data host.";
         return inner is null ? new DataIntegrityException(message) : new DataIntegrityException(message, inner);
     }
 

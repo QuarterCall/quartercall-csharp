@@ -1,7 +1,11 @@
 namespace QuarterCall;
 
 /// <summary>A file saved from the host, after it matched the manifest's description of it.</summary>
-/// <param name="Uri">The address the file was read from.</param>
+/// <param name="Uri">
+/// The address the file was read from: the data base address joined with the manifest's path for the file. That is
+/// <c>accounts_path</c>, <c>accounts_text_path</c> or <c>profiles_path</c>, each a directory, followed by
+/// <c>data.parquet</c>; or <c>quorum.detail_path</c> or <c>index.submissions_path</c>, each the file itself.
+/// </param>
 /// <param name="Sha256">
 /// The file's SHA-256 digest in lowercase hex, as the manifest names it: <c>accounts_sha256</c>,
 /// <c>accounts_text_sha256</c>, <c>profiles_sha256</c>, <c>quorum.detail_sha256</c> or

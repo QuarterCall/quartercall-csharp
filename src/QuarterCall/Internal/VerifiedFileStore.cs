@@ -74,8 +74,7 @@ internal sealed class VerifiedFileStore
             return new VerifiedFile(scratch, FileKeeper.None);
         }
 
-        Directory.CreateDirectory(_cacheDirectory);
-        var cached = Path.Combine(_cacheDirectory, file.Sha256 + Extension(file.Uri));
+        var cached = CachePath(_cacheDirectory, file);
         if (!await IsWholeAsync(cached, file, ct).ConfigureAwait(false))
         {
             await DownloadOverAsync(file, cached, ct).ConfigureAwait(false);
@@ -86,7 +85,9 @@ internal sealed class VerifiedFileStore
 
     /// <summary>
     /// Saves a verified copy of <paramref name="file"/> at <paramref name="path"/>, creating its directory if
-    /// missing. A file already there is replaced only by one that matches.
+    /// missing. A file already there is replaced only by one that matches. A copy from the cache is hashed as it is
+    /// copied, so the bytes placed at <paramref name="path"/> are always the bytes verified, and the cached file is
+    /// read once.
     /// </summary>
     /// <exception cref="DataIntegrityException">
     /// The download does not match <paramref name="file"/>, as for <see cref="FetchAsync"/>.
@@ -107,11 +108,26 @@ internal sealed class VerifiedFileStore
             return;
         }
 
-        var cached = await FetchAsync(file, ct).ConfigureAwait(false);
-        await using (cached.ConfigureAwait(false))
+        var cached = CachePath(_cacheDirectory, file);
+        try
         {
-            await CopyOverAsync(cached.Path, target, file, ct).ConfigureAwait(false);
+            await CopyOverAsync(cached, target, file, ct).ConfigureAwait(false);
+            return;
         }
+        catch (Exception e) when (e is DataIntegrityException or FileNotFoundException)
+        {
+            // No copy in the cache, or one that does not match: it is fetched again and replaced.
+        }
+
+        await DownloadOverAsync(file, cached, ct).ConfigureAwait(false);
+        await CopyOverAsync(cached, target, file, ct).ConfigureAwait(false);
+    }
+
+    // The cache's file for file, named by its digest. The cache directory is created if missing.
+    private static string CachePath(string cacheDirectory, FileRef file)
+    {
+        Directory.CreateDirectory(cacheDirectory);
+        return Path.Combine(cacheDirectory, file.Sha256 + Extension(file.Uri));
     }
 
     // A cached file's name carries the extension of the URL's file name, ".parquet" for every file today.
@@ -172,40 +188,61 @@ internal sealed class VerifiedFileStore
             {
                 whole = await IsWholeAsync(target, file, ct).ConfigureAwait(false);
             }
-            finally
+            catch
             {
-                File.Delete(temporary);
+                DeleteQuietly(temporary);
+                throw;
             }
 
             if (!whole)
             {
+                DeleteQuietly(temporary);
                 throw;
             }
+
+            File.Delete(temporary);
         }
     }
 
+    // Copies source to a temporary file beside target in one pass, hashing it as it goes, and moves the copy over
+    // target once it matches. FileNotFoundException when source is not there.
     private static async Task CopyOverAsync(string source, string target, FileRef file, CancellationToken ct)
     {
+        var input = VerifiedFile.OpenShared(source);
         var temporary = Beside(target);
-        try
+        await using (input.ConfigureAwait(false))
         {
-            var input = VerifiedFile.OpenShared(source);
-            await using (input.ConfigureAwait(false))
+            try
             {
                 var output = CreateNew(temporary);
                 await using (output.ConfigureAwait(false))
                 {
-                    await input.CopyToAsync(output, BufferSize, ct).ConfigureAwait(false);
+                    await CopyVerifiedAsync(input, output, file, ct).ConfigureAwait(false);
                 }
             }
-        }
-        catch
-        {
-            File.Delete(temporary);
-            throw;
+            catch
+            {
+                DeleteQuietly(temporary);
+                throw;
+            }
         }
 
         await PlaceAsync(temporary, target, file, ct).ConfigureAwait(false);
+    }
+
+    // Deletes a temporary file while another exception is on its way out. Should the delete fail, the file is left
+    // behind, and that is tolerated: throwing here would replace the exception in flight, hiding why the work
+    // failed, and would turn a mismatch, which is retried, into an IOException, which is not.
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Left behind, as above.
+        }
     }
 
     private static FileStream CreateNew(string path)
@@ -233,8 +270,9 @@ internal sealed class VerifiedFileStore
         }
     }
 
-    // Reads the body in one pass: each chunk goes to output and to the hash. Reading stops at the first byte past
-    // the declared length, so a body that is too long costs at most one byte more than the file.
+    // Reads body, a download or a cached file, in one pass: each chunk goes to output and to the hash. Reading stops
+    // at the first byte past the declared length, so a body that is too long costs at most one byte more than the
+    // file.
     private static async Task<long> CopyVerifiedAsync(Stream body, Stream output, FileRef file, CancellationToken ct)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -294,9 +332,8 @@ internal sealed class VerifiedFileStore
         {
             // A read cut short by a cancellation, the caller's or the timeout's, is that cancellation.
             ct.ThrowIfCancellationRequested();
-            // A dropped connection is a short download.
-            var detail = Invariant(
-                $"the download broke off after {total} of the {file.Bytes} bytes the manifest names");
+            // A dropped connection, or a cached file that cannot be read, is a short file.
+            var detail = Invariant($"reading it broke off after {total} of the {file.Bytes} bytes the manifest names");
             throw Mismatch(file, Measure.Length, detail, e);
         }
     }
@@ -313,7 +350,7 @@ internal sealed class VerifiedFileStore
     {
         var measure = differs == Measure.Length ? "length" : "SHA-256 digest";
         var message = $"The file at {file.Uri} does not match the manifest: its {measure} differs ({detail}). "
-            + "The quarter may be being republished; try again shortly.";
+            + "The file may be being republished; try again shortly.";
         return inner is null ? new DataIntegrityException(message) : new DataIntegrityException(message, inner);
     }
 
@@ -336,7 +373,7 @@ internal sealed class VerifiedFileStore
         }
         catch
         {
-            File.Delete(destination);
+            DeleteQuietly(destination);
             throw;
         }
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
@@ -116,6 +117,7 @@ public sealed class DownloadTests : IDisposable
             () => client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path));
 
         Assert.Contains("republished", e.Message);
+        Assert.Contains("try again", e.Message);
         Assert.Contains(new Uri(host.BaseAddress, file).AbsoluteUri, e.Message);
         Assert.Contains(served == "a changed byte" ? "digest" : "length", e.Message);
         Assert.Equal(3, ManifestRequests(host));
@@ -215,9 +217,98 @@ public sealed class DownloadTests : IDisposable
             () => store.SaveAsync(file, path, CancellationToken.None));
 
         Assert.IsAssignableFrom<IOException>(e.InnerException);
-        Assert.Contains("republished", e.Message);
+        // The same message serves the index, which is no quarter's.
+        Assert.Contains("The file may be being republished", e.Message);
         Assert.Contains("length", e.Message);
         Assert.Empty(Directory.GetFileSystemEntries(Path.GetDirectoryName(path)!));
+    }
+
+    [Fact]
+    public async Task StopsWaitingToRetryWhenCancelled()
+    {
+        var host = new FixtureHost();
+        var body = Body(5000);
+        var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var fileUri = new Uri(host.BaseAddress, file);
+        using var cancel = new CancellationTokenSource();
+        var sinceCancelled = new Stopwatch();
+        // The body ends short, and the caller cancels as it ends: the client is then waiting to read again.
+        host.OnRequest = request => request.RequestUri == fileUri
+            ? Serve(new CutShortStream(body[..1000], Cut.End, () =>
+            {
+                cancel.Cancel();
+                sinceCancelled.Start();
+            }))
+            : null;
+        using var client = host.CreateClient();
+        var path = Destination();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path, cancel.Token));
+        sinceCancelled.Stop();
+
+        // Well within the 250 ms wait, which the cancellation cut short; and no second attempt began.
+        Assert.InRange(sinceCancelled.Elapsed, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
+        Assert.Equal(new[] { ManifestUri(host), fileUri }, host.Requests.Select(r => r.Uri));
+        Assert.Empty(Directory.GetFileSystemEntries(Path.GetDirectoryName(path)!));
+    }
+
+    [Fact]
+    public async Task LeavesADirectoryAtPathAlone()
+    {
+        var host = new FixtureHost();
+        host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, Body(5000));
+        using var client = host.CreateClient();
+        var path = Destination();
+        Directory.CreateDirectory(path);
+        await File.WriteAllBytesAsync(Path.Combine(path, "kept"), [1]);
+
+        var e = await Record.ExceptionAsync(() => client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, path));
+
+        // The verified file cannot be moved over a directory, and a directory is not that file: the move's failure
+        // is passed on, once. Linux reports it as IOException; Windows may report it as UnauthorizedAccessException.
+        Assert.True(
+            e is IOException || (OperatingSystem.IsWindows() && e is UnauthorizedAccessException),
+            $"Expected the failed move, got {e}");
+        Assert.Equal(1, ManifestRequests(host));
+        Assert.Equal(new[] { "accounts.parquet" }, FileNames(Path.GetDirectoryName(path)!));
+        Assert.Equal(new[] { "kept" }, FileNames(path));
+    }
+
+    [Fact]
+    public async Task KeepsTheCancellationWhenCleanupFails()
+    {
+        // Only Unix has a directory mode that forbids deleting a file in it.
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var host = new FixtureHost();
+        var body = Body(200_000);
+        var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var fileUri = new Uri(host.BaseAddress, file);
+        var stalling = new CutShortStream(body[..1000], Cut.Stall);
+        host.OnRequest = request => request.RequestUri == fileUri ? Serve(stalling) : null;
+        using var client = host.CreateClient();
+        var directory = Path.GetDirectoryName(Destination())!;
+        using var cancel = new CancellationTokenSource();
+
+        var download = client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, Destination(), cancel.Token);
+        await stalling.HeadRead.Task.WaitAsync(LongWait);
+        var mode = File.GetUnixFileMode(directory);
+        File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            await cancel.CancelAsync();
+
+            // The temporary file cannot be deleted now; the caller still learns of the cancellation.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+        }
+        finally
+        {
+            File.SetUnixFileMode(directory, mode);
+        }
     }
 
     [Theory]
@@ -271,8 +362,12 @@ public sealed class DownloadTests : IDisposable
     [InlineData("a/../../x")]
     [InlineData("%2e%2e/x")]
     [InlineData("")]
-    // Its form passes, but Uri trims the leading space and the address it composes is another host's.
+    // Uri trims leading white space, so each of these would compose another address than the one judged.
     [InlineData(" //other.example/x")]
+    [InlineData(" ../x")]
+    [InlineData("\t/x")]
+    [InlineData("a/b\n")]
+    [InlineData("a b")]
     public async Task RefusesAPathThatIsNotRelative(string path)
     {
         // Beneath a host's root, "../x" or "x?y=1" composes an address still beneath the base: only the path's form
@@ -436,6 +531,7 @@ public sealed class DownloadTests : IDisposable
     [Theory]
     [InlineData("other bytes of the same length")]
     [InlineData("fewer bytes")]
+    [InlineData("more bytes")]
     public async Task ReplacesACorruptCachedFile(string corruption)
     {
         var host = new FixtureHost();
@@ -445,7 +541,12 @@ public sealed class DownloadTests : IDisposable
         using var client = host.CreateClient(cache);
         await client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, Destination("first.parquet"));
         var cached = Path.Combine(cache, Digest(body) + ".parquet");
-        var corrupt = corruption == "fewer bytes" ? body[..4000] : Changed(body, at: 0);
+        var corrupt = corruption switch
+        {
+            "fewer bytes" => body[..4000],
+            "more bytes" => [.. body, .. Body(10, seed: 3)],
+            _ => Changed(body, at: 0),
+        };
         await File.WriteAllBytesAsync(cached, corrupt);
         var path = Destination("second.parquet");
 
@@ -460,10 +561,27 @@ public sealed class DownloadTests : IDisposable
     [Fact]
     public async Task SharesACacheBetweenTwoReads()
     {
-        // Every request waits, so the two reads overlap.
-        var host = new FixtureHost { Delay = TimeSpan.FromMilliseconds(100) };
+        var host = new FixtureHost();
         var body = Body(200_000);
-        host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var file = host.AddFile(host.AddQuarter("2026Q3"), EvidenceTable.Accounts, body);
+        var fileUri = new Uri(host.BaseAddress, file);
+        // Neither file request is answered until both have arrived, so the two reads overlap.
+        var arrived = 0;
+        var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hold = async (request, token) =>
+        {
+            if (request.RequestUri != fileUri)
+            {
+                return;
+            }
+
+            if (Interlocked.Increment(ref arrived) == 2)
+            {
+                both.TrySetResult();
+            }
+
+            await both.Task.WaitAsync(LongWait, token);
+        };
         var cache = Path.Combine(_root, "cache");
         using var client = host.CreateClient(cache);
         var one = Destination("one.parquet");
@@ -473,6 +591,7 @@ public sealed class DownloadTests : IDisposable
             client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, one),
             client.Data.DownloadAsync(Q2026Q3, EvidenceTable.Accounts, two));
 
+        Assert.Equal(2, host.Requests.Count(r => r.Uri == fileUri));
         Assert.Equal(body, await File.ReadAllBytesAsync(one));
         Assert.Equal(body, await File.ReadAllBytesAsync(two));
         Assert.Equal(new[] { Digest(body) + ".parquet" }, FileNames(cache));
@@ -580,10 +699,13 @@ public sealed class DownloadTests : IDisposable
 
         // Throws after the head, as a dropped connection does.
         Break,
+
+        // Ends after the head.
+        End,
     }
 
-    // A body that serves its head, then stalls or breaks.
-    private sealed class CutShortStream(byte[] head, Cut cut) : Stream
+    // A body that serves its head, then stalls, breaks or ends, after running atCut.
+    private sealed class CutShortStream(byte[] head, Cut cut, Action? atCut = null) : Stream
     {
         private int _position;
 
@@ -616,12 +738,17 @@ public sealed class DownloadTests : IDisposable
             }
 
             HeadRead.TrySetResult();
+            atCut?.Invoke();
             if (cut == Cut.Break)
             {
                 throw new IOException("The connection was reset.");
             }
 
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            if (cut == Cut.Stall)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
             return 0;
         }
 
