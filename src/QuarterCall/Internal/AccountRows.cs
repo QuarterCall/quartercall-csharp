@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
-using static System.FormattableString;
 
 namespace QuarterCall.Internal;
 
@@ -20,8 +19,6 @@ internal sealed class AccountRows
     private const string AccountValueColumn = "account_value";
     private const string IngestedAtColumn = "ingested_at";
     private const string CuidColumn = "cuid";
-
-    private const string Remedy = "To read it, upgrade the QuarterCall package.";
 
     // Every column a record is read from, and the type the file must hold it as.
     private static readonly (string Name, Type Type)[] Columns =
@@ -77,9 +74,9 @@ internal sealed class AccountRows
         }
 
         return new AccountRows(
-            Codes(filter.Codes, paramName),
-            Identifiers(filter.CuNumbers, nameof(AccountFilter.CuNumbers), paramName),
-            Identifiers(filter.Cuids, nameof(AccountFilter.Cuids), paramName));
+            ReadRules.FreezeCodes(filter.Codes, paramName),
+            ReadRules.FreezeIdentifiers(filter.CuNumbers, nameof(AccountFilter.CuNumbers), paramName),
+            ReadRules.FreezeIdentifiers(filter.Cuids, nameof(AccountFilter.Cuids), paramName));
     }
 
     /// <summary>
@@ -126,53 +123,11 @@ internal sealed class AccountRows
         }
     }
 
-    private static FrozenSet<string>? Codes(IReadOnlyCollection<string>? codes, string paramName)
-    {
-        if (codes is null)
-        {
-            return null;
-        }
-
-        foreach (var code in codes)
-        {
-            if (string.IsNullOrEmpty(code))
-            {
-                throw new ArgumentException(
-                    "The filter's Codes hold a null or empty code; an account code has at least one character.",
-                    paramName);
-            }
-        }
-
-        return codes.ToFrozenSet(StringComparer.Ordinal);
-    }
-
-    private static FrozenSet<int>? Identifiers(IReadOnlyCollection<int>? identifiers, string set, string paramName)
-    {
-        if (identifiers is null)
-        {
-            return null;
-        }
-
-        var frozen = identifiers.ToFrozenSet();
-        foreach (var identifier in frozen)
-        {
-            if (identifier < 1)
-            {
-                throw new ArgumentException(
-                    Invariant($"The filter's {set} hold {identifier}; each is 1 or more."), paramName);
-            }
-        }
-
-        return frozen;
-    }
-
     // The value of a column a record requires, which a null in the file leaves without one.
     private static T Required<T>(T? value, string column)
         where T : struct
     {
-        return value ?? throw new UnsupportedSchemaException(
-            $"The accounts file has a null in its \"{column}\" column, where this version of QuarterCall reads a "
-            + $"value on every row. The file may be of a newer form. {Remedy}");
+        return ReadRules.Required(value, "accounts", column);
     }
 
     // Whether the filter selects the row. Only the filter's own columns have been read when this is asked.
@@ -199,9 +154,7 @@ internal sealed class AccountRows
     {
         private readonly StringPool _codes = new();
 
-        // Probed by a label's characters, so a label already met makes no string.
-        private readonly Dictionary<string, Quarter>.AlternateLookup<ReadOnlySpan<char>> _quarters =
-            new Dictionary<string, Quarter>(StringComparer.Ordinal).GetAlternateLookup<ReadOnlySpan<char>>();
+        private readonly QuarterLabels _quarters = new("accounts");
         private ReadOnlyMemory<ReadOnlyMemory<char>?> _quarter;
         private ReadOnlyMemory<DateOnly?> _cycleDate;
         private ReadOnlyMemory<int?> _cuNumber;
@@ -282,7 +235,7 @@ internal sealed class AccountRows
         {
             return new Account
             {
-                Quarter = QuarterOf(Required(_quarter.Span[row], QuarterColumn).Span),
+                Quarter = _quarters.Parse(Required(_quarter.Span[row], QuarterColumn).Span),
                 CycleDate = Required(_cycleDate.Span[row], CycleDateColumn),
                 CuNumber = Required(_cuNumber.Span[row], CuNumberColumn),
                 SubmissionId = Required(_submissionId.Span[row], SubmissionIdColumn),
@@ -295,25 +248,6 @@ internal sealed class AccountRows
                     DateTime.SpecifyKind(Required(_ingestedAt.Span[row], IngestedAtColumn), DateTimeKind.Utc)),
                 Cuid = _cuid.Span[row],
             };
-        }
-
-        // The quarter a label names, parsed once for each distinct label.
-        private Quarter QuarterOf(ReadOnlySpan<char> label)
-        {
-            if (_quarters.TryGetValue(label, out var quarter))
-            {
-                return quarter;
-            }
-
-            if (!Quarter.TryParse(label, null, out quarter))
-            {
-                throw new UnsupportedSchemaException(
-                    $"The accounts file's \"{QuarterColumn}\" column holds \"{label}\", which is not a quarter such as "
-                    + $"2026Q3. The file may be of a newer form. {Remedy}");
-            }
-
-            _quarters[label] = quarter;
-            return quarter;
         }
     }
 }

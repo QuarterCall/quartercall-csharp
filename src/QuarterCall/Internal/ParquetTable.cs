@@ -20,8 +20,6 @@ namespace QuarterCall.Internal;
 /// </remarks>
 internal sealed class ParquetTable : IAsyncDisposable
 {
-    private const string Remedy = "To read it, upgrade the QuarterCall package.";
-
     private readonly FileStream _stream;
     private readonly ParquetReader _reader;
     private readonly Dictionary<string, DataField> _fields;
@@ -261,7 +259,7 @@ internal sealed class ParquetTable : IAsyncDisposable
             {
                 throw new UnsupportedSchemaException(
                     Invariant($"The published file has a row group of {counts[index]} rows, ")
-                    + $"which this version of QuarterCall cannot hold at once. {Remedy}");
+                    + $"which this version of QuarterCall cannot hold at once. {ReadRules.Remedy}");
             }
 
             rows[index] = (int)counts[index];
@@ -301,7 +299,7 @@ internal sealed class ParquetTable : IAsyncDisposable
     {
         return new UnsupportedSchemaException(
             "The published file matched the manifest but could not be read as Parquet, so it may be of a newer form "
-            + $"than this version of QuarterCall reads. {Remedy}",
+            + $"than this version of QuarterCall reads. {ReadRules.Remedy}",
             inner);
     }
 
@@ -320,7 +318,7 @@ internal sealed class ParquetTable : IAsyncDisposable
 
         throw new UnsupportedSchemaException(
             $"The published file has no column \"{column}\" of one value a row, which this version of QuarterCall "
-            + $"reads. The file may be of a newer form. {Remedy}");
+            + $"reads. The file may be of a newer form. {ReadRules.Remedy}");
     }
 
     private DataField Field(string column, Type type)
@@ -333,7 +331,7 @@ internal sealed class ParquetTable : IAsyncDisposable
 
         throw new UnsupportedSchemaException(
             $"The published file's column \"{column}\" holds {Describe(field.ClrType)}, where this version of "
-            + $"QuarterCall reads {Describe(type)}. The file may be of a newer form. {Remedy}");
+            + $"QuarterCall reads {Describe(type)}. The file may be of a newer form. {ReadRules.Remedy}");
     }
 
     // The column's buffer, rented at its first read at the largest row group's size.

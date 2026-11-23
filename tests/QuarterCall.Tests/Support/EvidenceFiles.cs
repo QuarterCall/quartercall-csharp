@@ -15,6 +15,34 @@ internal sealed record AccountRow(
     DateTime IngestedAt,
     int? Cuid);
 
+/// <summary>One row of the published accounts-text file.</summary>
+internal sealed record AccountTextRow(
+    string Quarter,
+    DateOnly CycleDate,
+    int CuNumber,
+    long SubmissionId,
+    string AccountCode,
+    string AccountText,
+    DateTime IngestedAt);
+
+/// <summary>
+/// One row of the published profiles file: its eight leading columns, and the regulator's columns it holds a value
+/// for, by name; a column not named is null. A null <see cref="CuNumber"/> is written as the file's null.
+/// </summary>
+internal sealed record ProfileRow(
+    string Quarter,
+    DateOnly CycleDate,
+    int? CuNumber,
+    int? Cuid,
+    long SubmissionId,
+    short Version,
+    DateTime ObservedAt,
+    string ObservedAtSource)
+{
+    /// <summary>The regulator's columns' values: a string, an int or a double, by the column's type.</summary>
+    public IReadOnlyDictionary<string, object?> Values { get; init; } = new Dictionary<string, object?>();
+}
+
 /// <summary>How an accounts file departs from the published schema, for a test of a file read or refused.</summary>
 internal sealed record AccountsShape
 {
@@ -141,5 +169,133 @@ internal static class EvidenceFiles
             "note" => group.WriteAsync(field, rows.Select(_ => "extra").ToArray()),
             _ => throw new ArgumentOutOfRangeException(nameof(field), field.Name, null),
         };
+    }
+
+    /// <summary>The bytes of an accounts-text file holding <paramref name="rows"/>, one row group for each
+    /// <paramref name="rowsPerGroup"/> rows.</summary>
+    public static byte[] AccountText(IReadOnlyList<AccountTextRow> rows, int rowsPerGroup = int.MaxValue)
+    {
+        // Fresh fields for each file: see Fields.
+        DataField[] fields =
+        [
+            new DataField<string>("quarter"),
+            new DateTimeDataField("cycle_date", DateTimeFormat.Date),
+            new DataField<int>("cu_number"),
+            new DataField<long>("submission_id"),
+            new DataField<string>("account_code"),
+            new DataField<string>("account_text"),
+            new DataField<DateTime>("ingested_at"),
+        ];
+        return WriteGroups(fields, rows, rowsPerGroup, (group, field, chunk) => field.Name switch
+        {
+            "quarter" => group.WriteAsync(field, chunk.Select(row => row.Quarter).ToArray()),
+            "cycle_date" => group.WriteAsync<DateTime>(
+                field, chunk.Select(row => row.CycleDate.ToDateTime(TimeOnly.MinValue)).ToArray()),
+            "cu_number" => group.WriteAsync<int>(field, chunk.Select(row => row.CuNumber).ToArray()),
+            "submission_id" => group.WriteAsync<long>(field, chunk.Select(row => row.SubmissionId).ToArray()),
+            "account_code" => group.WriteAsync(field, chunk.Select(row => row.AccountCode).ToArray()),
+            "account_text" => group.WriteAsync(field, chunk.Select(row => row.AccountText).ToArray()),
+            "ingested_at" => group.WriteAsync<DateTime>(field, chunk.Select(row => row.IngestedAt).ToArray()),
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field.Name, null),
+        });
+    }
+
+    /// <summary>
+    /// The bytes of a profiles file holding <paramref name="rows"/>: the eight leading columns, every one nullable
+    /// but <c>quarter</c>, and then <paramref name="ncuaColumns"/> in the order given, each nullable. A column's
+    /// type is text, <see cref="int"/> or, for a test of a file that is refused, <see cref="double"/>.
+    /// <c>observed_at</c> is a timestamp in microseconds, not adjusted to UTC.
+    /// </summary>
+    public static byte[] Profiles(
+        IReadOnlyList<ProfileRow> rows,
+        IReadOnlyList<(string Name, Type Type)> ncuaColumns,
+        int rowsPerGroup = int.MaxValue)
+    {
+        List<DataField> fields =
+        [
+            new DataField<string>("quarter", nullable: false),
+            new DateTimeDataField("cycle_date", DateTimeFormat.Date, isNullable: true),
+            new DataField<int?>("cu_number"),
+            new DataField<int?>("cuid"),
+            new DataField<long?>("submission_id"),
+            new DataField<short?>("version"),
+            new DateTimeDataField(
+                "observed_at", DateTimeFormat.DateAndTimeMicros, isAdjustedToUTC: false, isNullable: true),
+            new DataField<string>("observed_at_source"),
+        ];
+        foreach (var (name, type) in ncuaColumns)
+        {
+            fields.Add(type switch
+            {
+                _ when type == typeof(int) => new DataField<int?>(name),
+                _ when type == typeof(string) => new DataField<string>(name),
+                _ when type == typeof(double) => new DataField<double?>(name),
+                _ => throw new ArgumentOutOfRangeException(nameof(ncuaColumns), type, null),
+            });
+        }
+
+        return WriteGroups(fields, rows, rowsPerGroup, (group, field, chunk) => field.Name switch
+        {
+            "quarter" => group.WriteAsync(field, chunk.Select(row => row.Quarter).ToArray()),
+            "cycle_date" => group.WriteAsync<DateTime>(
+                field, chunk.Select(row => (DateTime?)row.CycleDate.ToDateTime(TimeOnly.MinValue)).ToArray()),
+            "cu_number" => group.WriteAsync<int>(field, chunk.Select(row => row.CuNumber).ToArray()),
+            "cuid" => group.WriteAsync<int>(field, chunk.Select(row => row.Cuid).ToArray()),
+            "submission_id" => group.WriteAsync<long>(field, chunk.Select(row => (long?)row.SubmissionId).ToArray()),
+            "version" => group.WriteAsync<short>(field, chunk.Select(row => (short?)row.Version).ToArray()),
+            "observed_at" => group.WriteAsync<DateTime>(
+                field, chunk.Select(row => (DateTime?)row.ObservedAt).ToArray()),
+            "observed_at_source" => group.WriteAsync(field, chunk.Select(row => row.ObservedAtSource).ToArray()),
+            _ => WriteNcuaColumn(group, field, chunk),
+        });
+    }
+
+    private static Task WriteNcuaColumn(ParquetRowGroupWriter group, DataField field, ProfileRow[] chunk)
+    {
+        object? Value(ProfileRow row)
+        {
+            return row.Values.GetValueOrDefault(field.Name);
+        }
+
+        if (field.ClrType == typeof(int))
+        {
+            return group.WriteAsync<int>(field, chunk.Select(row => (int?)Value(row)).ToArray());
+        }
+
+        if (field.ClrType == typeof(double))
+        {
+            return group.WriteAsync<double>(field, chunk.Select(row => (double?)Value(row)).ToArray());
+        }
+
+        return group.WriteAsync(field, chunk.Select(row => (string?)Value(row)).ToArray());
+    }
+
+    // Writes rows in row groups of rowsPerGroup, each column by write. Parquet.Net writes only asynchronously, so the
+    // write runs on the thread pool, which keeps this wait clear of the caller's synchronisation context.
+    private static byte[] WriteGroups<TRow>(
+        IReadOnlyList<DataField> fields,
+        IReadOnlyList<TRow> rows,
+        int rowsPerGroup,
+        Func<ParquetRowGroupWriter, DataField, TRow[], Task> write)
+    {
+        return Task.Run(async () =>
+        {
+            var schema = new ParquetSchema([.. fields]);
+            var options = new ParquetOptions { CompressionMethod = CompressionMethod.Snappy };
+            using var output = new MemoryStream();
+            await using (var writer = await ParquetWriter.CreateAsync(schema, output, options))
+            {
+                foreach (var chunk in rows.Chunk(rowsPerGroup))
+                {
+                    using var group = writer.CreateRowGroup();
+                    foreach (var field in schema.DataFields)
+                    {
+                        await write(group, field, chunk);
+                    }
+                }
+            }
+
+            return output.ToArray();
+        }).GetAwaiter().GetResult();
     }
 }
