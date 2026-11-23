@@ -223,7 +223,8 @@ internal sealed class VerifiedFileStore
                 throw;
             }
 
-            File.Delete(temporary);
+            // The target matches and serves; the copy is no longer needed.
+            DeleteQuietly(temporary);
         }
     }
 
@@ -258,9 +259,10 @@ internal sealed class VerifiedFileStore
     }
 
     // Deletes a temporary file the work no longer needs: one a failure leaves while its exception is on the way out,
-    // or a copy from the cache that did not match. Should the delete fail, the file is left behind, and that is
-    // tolerated: throwing here would replace the exception in flight, hiding why the work failed, and would turn a
-    // mismatch, which is retried, into an IOException, which is not.
+    // a copy from the cache that did not match, or a copy whose target already matches. Should the delete fail, the
+    // file is left behind, and that is tolerated: throwing here would replace the exception in flight, hiding why the
+    // work failed, would turn a mismatch, which is retried, into an IOException, which is not, and would fail a file
+    // that serves.
     private static void DeleteQuietly(string path)
     {
         try

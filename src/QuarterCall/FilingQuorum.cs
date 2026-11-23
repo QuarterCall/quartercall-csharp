@@ -5,6 +5,12 @@ namespace QuarterCall;
 /// verdicts are the host's: the package computes none. A member the host leaves out is null: an absent key
 /// means none, never zero.
 /// </summary>
+/// <remarks>
+/// The equality a record gives compares <see cref="Verdicts"/> and <see cref="OutstandingMaterial"/> by reference,
+/// and each read of the manifest makes new ones. Two quorums read apart are never equal, even with the same values:
+/// a quorum is equal only to itself, or to a copy of it made with <c>with</c> that changes nothing else. Compare
+/// their members instead.
+/// </remarks>
 public sealed record FilingQuorum
 {
     /// <summary>The name and version of the measurement, <c>measurement</c>.</summary>
@@ -67,7 +73,9 @@ public sealed record FilingQuorum
     /// </summary>
     public decimal? CoverageLargestOutstandingShare { get; init; }
 
-    /// <summary>The share of assets above which an outstanding filer is material, <c>materiality</c>.</summary>
+    /// <summary>
+    /// The share of assets at or above which an outstanding filer is material, <c>materiality</c>.
+    /// </summary>
     public decimal? Materiality { get; init; }
 
     /// <summary>What the ceiling of the asset coverage rests on, <c>coverage.ceiling_basis</c>.</summary>

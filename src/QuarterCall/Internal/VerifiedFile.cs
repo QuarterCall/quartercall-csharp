@@ -38,12 +38,20 @@ internal sealed class VerifiedFile : IAsyncDisposable
         return OpenShared(Path);
     }
 
-    /// <summary>Deletes the file, unless it is in the cache.</summary>
+    /// <summary>Deletes the file, unless it is in the cache. A delete that fails leaves the file where it is.</summary>
     public ValueTask DisposeAsync()
     {
         if (_keeper == FileKeeper.None)
         {
-            File.Delete(Path);
+            try
+            {
+                File.Delete(Path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // The file has been served. One left in the temporary directory is tolerable; failing the read for it
+                // is not.
+            }
         }
 
         return ValueTask.CompletedTask;

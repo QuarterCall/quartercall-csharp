@@ -330,10 +330,11 @@ internal sealed class ParquetTable : IAsyncDisposable
         }
     }
 
-    // Every exception Parquet.Net throws is a file this version cannot read, but a cancellation, which is the caller's.
+    // Every exception Parquet.Net throws is a file this version cannot read, but a cancellation, which is the caller's,
+    // and a want of memory, which is the process's.
     private static bool IsParquetFailure(Exception e)
     {
-        return e is not OperationCanceledException;
+        return e is not (OperationCanceledException or OutOfMemoryException);
     }
 
     private static UnsupportedSchemaException Unreadable(Exception inner)

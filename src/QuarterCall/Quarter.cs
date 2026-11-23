@@ -14,7 +14,7 @@ public readonly record struct Quarter : IComparable<Quarter>, ISpanParsable<Quar
     private const int LabelLength = 6;
     private const char QuarterMark = 'Q';
 
-    // Years since the start of year 0, in quarters. Zero is year 0, which no valid quarter has,
+    // Quarters since the start of year 0. Zero is the first quarter of year 0, which no valid quarter has,
     // so default(Quarter) is never equal to a valid one.
     private readonly int _index;
 

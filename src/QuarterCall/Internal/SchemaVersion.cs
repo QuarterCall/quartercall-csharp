@@ -56,7 +56,7 @@ internal static class SchemaVersion
     {
         return new UnsupportedSchemaException(
             $"This version of QuarterCall reads version {major} of {document}, and the one published {found}. "
-            + "To read it, upgrade the QuarterCall package.");
+            + ReadRules.Remedy);
     }
 
     private static bool IsOfMajor(string? published, int major)

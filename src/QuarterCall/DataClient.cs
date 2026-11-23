@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using QuarterCall.Internal;
 
@@ -78,7 +79,7 @@ public sealed class DataClient
     /// <exception cref="UnsupportedSchemaException">
     /// While enumerating: the manifest is of a schema version this version of the package does not read, or the file
     /// is in a form it does not read: it lacks a column, holds one as another type or holds a null where a value is
-    /// required, or is not a Parquet file it can read.
+    /// required, or is not a Parquet file it can read, which includes one the disk fails to give back.
     /// </exception>
     /// <exception cref="HttpRequestException">
     /// While enumerating: a request failed, or the host answered with an error.
@@ -91,7 +92,11 @@ public sealed class DataClient
     /// While enumerating: <paramref name="cancellationToken"/>, or the token given to <c>WithCancellation</c>, was
     /// cancelled.
     /// </exception>
-    /// <exception cref="IOException">While enumerating: the file could not be written or read on disk.</exception>
+    /// <exception cref="IOException">
+    /// While enumerating: the file could not be written in the cache or the temporary directory, or opened once
+    /// written. A failure to read it once open arrives as an <see cref="UnsupportedSchemaException"/>, since the
+    /// reader cannot tell a failing disk from a file it does not understand.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">
     /// While enumerating: the process may not write the file in the cache or the temporary directory.
     /// </exception>
@@ -139,7 +144,7 @@ public sealed class DataClient
     /// <exception cref="UnsupportedSchemaException">
     /// While enumerating: the manifest is of a schema version this version of the package does not read, or the file
     /// is in a form it does not read: it lacks a column, holds one as another type or holds a null where a value
-    /// is required, or is not a Parquet file it can read.
+    /// is required, or is not a Parquet file it can read, which includes one the disk fails to give back.
     /// </exception>
     /// <exception cref="HttpRequestException">
     /// While enumerating: a request failed, or the host answered with an error.
@@ -152,7 +157,11 @@ public sealed class DataClient
     /// While enumerating: <paramref name="cancellationToken"/>, or the token given to <c>WithCancellation</c>, was
     /// cancelled.
     /// </exception>
-    /// <exception cref="IOException">While enumerating: the file could not be written or read on disk.</exception>
+    /// <exception cref="IOException">
+    /// While enumerating: the file could not be written in the cache or the temporary directory, or opened once
+    /// written. A failure to read it once open arrives as an <see cref="UnsupportedSchemaException"/>, since the
+    /// reader cannot tell a failing disk from a file it does not understand.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">
     /// While enumerating: the process may not write the file in the cache or the temporary directory.
     /// </exception>
@@ -201,8 +210,9 @@ public sealed class DataClient
     /// <exception cref="UnsupportedSchemaException">
     /// While enumerating: the manifest is of a schema version this version of the package does not read, or the file
     /// is in a form it does not read: it lacks one of the eight leading columns, holds one as another type or holds a
-    /// null where a value is required, or is not a Parquet file it can read. A regulator's column of a type the
-    /// package does not read is left out of <see cref="FilingProfile.Columns"/>, and does not refuse the file.
+    /// null where a value is required, or is not a Parquet file it can read, which includes one the disk fails to give
+    /// back. A regulator's column of a type the package does not read is left out of
+    /// <see cref="FilingProfile.Columns"/>, and does not refuse the file.
     /// </exception>
     /// <exception cref="HttpRequestException">
     /// While enumerating: a request failed, or the host answered with an error.
@@ -215,7 +225,11 @@ public sealed class DataClient
     /// While enumerating: <paramref name="cancellationToken"/>, or the token given to <c>WithCancellation</c>, was
     /// cancelled.
     /// </exception>
-    /// <exception cref="IOException">While enumerating: the file could not be written or read on disk.</exception>
+    /// <exception cref="IOException">
+    /// While enumerating: the file could not be written in the cache or the temporary directory, or opened once
+    /// written. A failure to read it once open arrives as an <see cref="UnsupportedSchemaException"/>, since the
+    /// reader cannot tell a failing disk from a file it does not understand.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">
     /// While enumerating: the process may not write the file in the cache or the temporary directory.
     /// </exception>
@@ -340,7 +354,7 @@ public sealed class DataClient
         if (file is null)
         {
             // Only a quarter's text may be absent without an error; the manifest always names its accounts.
-            yield break;
+            throw new UnreachableException("The manifest named no accounts file for a quarter it lists as readable.");
         }
 
         await using (file.ConfigureAwait(false))
@@ -400,7 +414,7 @@ public sealed class DataClient
         if (file is null)
         {
             // Only a quarter's text may be absent without an error; a quarter without profiles is refused earlier.
-            yield break;
+            throw new UnreachableException("The manifest named no profiles file for a quarter it lists as readable.");
         }
 
         await using (file.ConfigureAwait(false))

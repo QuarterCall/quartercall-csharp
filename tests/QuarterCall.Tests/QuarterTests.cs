@@ -1,7 +1,7 @@
-using Xunit;
 using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
+using Xunit;
 
 namespace QuarterCall.Tests;
 

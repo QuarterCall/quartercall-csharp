@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using QuarterCall.Internal;
 using QuarterCall.Tests.Support;
@@ -187,6 +188,37 @@ public sealed class AccountsTests : IDisposable
         Assert.Equal(OtherRows.Select(ToAccount), read);
         Assert.Equal(2, host.Requests.Count(r => r.Uri == ManifestUri(host)));
         Assert.Empty(Directory.GetFileSystemEntries(_temporary));
+    }
+
+    [UnixPermissionsFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task ServesTheRowsWhenTheTemporaryFileCannotBeDeleted()
+    {
+        var host = Publish(EvidenceFiles.Accounts(Rows, RowsPerGroup));
+        using var client = Client(host);
+        var read = new List<Account>();
+        var mode = File.GetUnixFileMode(_temporary);
+        try
+        {
+            await foreach (var account in client.Data.ReadAccountsAsync(Q2026Q3))
+            {
+                if (read.Count == 0)
+                {
+                    // The file is downloaded and open: from here nothing in its directory can be deleted.
+                    File.SetUnixFileMode(_temporary, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+                }
+
+                read.Add(account);
+            }
+
+            Assert.Equal(Rows.Select(ToAccount), read);
+            // The delete did fail: the file is left, for the temporary directory's owner to clear.
+            Assert.Single(Directory.GetFiles(_temporary));
+        }
+        finally
+        {
+            File.SetUnixFileMode(_temporary, mode);
+        }
     }
 
     [Fact]

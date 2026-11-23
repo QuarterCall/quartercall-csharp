@@ -372,7 +372,7 @@ public sealed class TextAndProfilesTests : IDisposable
         var read = await ReadProfilesAsync(client);
         var again = await ReadProfilesAsync(client);
 
-        // Two rows of the first row group and one of the second hold TX, and a third string for it would be waste.
+        // Both rows of the first row group hold TX, and a second string for it would be waste.
         Assert.Same(read[0].GetString("state"), read[1].GetString("state"));
         Assert.Equal("TX", again[0].GetString("state"));
         Assert.NotSame(read[0].GetString("state"), again[0].GetString("state"));
