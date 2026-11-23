@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -15,11 +16,24 @@ internal sealed class HostClient
     // The SDK writes the informational version as "<version>+<commit>"; the host is told the version only.
     private const char MetadataMark = '+';
 
+    private const char Separator = '/';
+
+    // A colon in a path's first segment makes the path a scheme's, such as "https:" or "C:".
+    private const char SchemeMark = ':';
+
+    private const string ParentSegment = "..";
+
     private static readonly ProductInfoHeaderValue UserAgent = new(ProductName, PackageVersion());
+
+    // What a relative path beneath the base address never holds: a query, a fragment, a backslash.
+    private static readonly SearchValues<char> RefusedMarks = SearchValues.Create("?#\\");
 
     private readonly HttpClient _http;
     private readonly Uri _baseAddress;
     private readonly TimeSpan _timeout;
+
+    // The base address without its query or fragment: every address beneath it starts with this.
+    private readonly string _root;
 
     /// <summary>Creates a client of the host at <paramref name="baseAddress"/>.</summary>
     /// <param name="http">The client that sends; it is never changed.</param>
@@ -30,12 +44,43 @@ internal sealed class HostClient
         _http = http;
         _baseAddress = AsDirectory(baseAddress);
         _timeout = timeout;
+        _root = _baseAddress.GetLeftPart(UriPartial.Path);
     }
 
-    /// <summary>The address of <paramref name="relativePath"/> beneath the host's base address.</summary>
+    /// <summary>
+    /// The address of <paramref name="relativePath"/> beneath the host's base address. Every address the client
+    /// requests is made here, so no path the manifest names can lead elsewhere.
+    /// </summary>
+    /// <param name="relativePath">A path relative to the base address, as the manifest writes it.</param>
+    /// <exception cref="DataIntegrityException">
+    /// The path is not relative, or leads out from beneath the base address: it is empty, or has a scheme, a host, a
+    /// query, a fragment, a leading <c>/</c>, a backslash or a <c>..</c> segment, or the address composed from it
+    /// is not beneath the base address.
+    /// </exception>
     public Uri Resolve(string relativePath)
     {
-        return new Uri(_baseAddress, relativePath);
+        if (!HasRelativeForm(relativePath))
+        {
+            throw NotRelative(relativePath, inner: null);
+        }
+
+        Uri uri;
+        try
+        {
+            uri = new Uri(_baseAddress, relativePath);
+        }
+        catch (UriFormatException e)
+        {
+            throw NotRelative(relativePath, e);
+        }
+
+        // The form alone is not enough: Uri trims leading white space, so " //host/x" names another host.
+        if (!uri.AbsoluteUri.StartsWith(_root, StringComparison.Ordinal))
+        {
+            throw NotRelative(relativePath, inner: null);
+        }
+
+        return uri;
     }
 
     /// <summary>
@@ -82,6 +127,35 @@ internal sealed class HostClient
                 + "Try again, or allow more time with QuarterCallOptions.Timeout.";
             throw new TaskCanceledException(message, new TimeoutException(message, e), e.CancellationToken);
         }
+    }
+
+    // Whether a path has the form of one relative to the base address and beneath it. The path is judged unescaped,
+    // so an escaped dot, slash or mark counts as what it stands for.
+    private static bool HasRelativeForm(string path)
+    {
+        var plain = Uri.UnescapeDataString(path);
+        if (plain.Length == 0 || plain[0] == Separator || plain.AsSpan().ContainsAny(RefusedMarks))
+        {
+            return false;
+        }
+
+        var slash = plain.IndexOf(Separator);
+        var first = slash < 0 ? plain : plain[..slash];
+        if (first.Contains(SchemeMark))
+        {
+            return false;
+        }
+
+        return !plain.Split(Separator).Contains(ParentSegment);
+    }
+
+    private DataIntegrityException NotRelative(string path, UriFormatException? inner)
+    {
+        var message = $"The manifest names \"{path}\" as the path of a file, but a path must be relative to the "
+            + $"data address, {_root}, and stay beneath it: no scheme, host, query, fragment, leading slash, "
+            + "backslash or \"..\" segment. Nothing was requested from it. Check that the data address points to a "
+            + "QuarterCall data host.";
+        return inner is null ? new DataIntegrityException(message) : new DataIntegrityException(message, inner);
     }
 
     private static void ThrowIfFailed(HttpResponseMessage response, Uri uri)

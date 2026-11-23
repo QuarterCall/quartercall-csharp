@@ -1,0 +1,343 @@
+using System.Buffers;
+using System.Security.Cryptography;
+using static System.FormattableString;
+
+namespace QuarterCall.Internal;
+
+/// <summary>
+/// Downloads files the manifest names and verifies each against its length and SHA-256 digest before anyone reads
+/// it. With a cache directory, a verified file is kept there by its digest and read from there again.
+/// </summary>
+/// <remarks>
+/// A file is written whole to a temporary file of its own, hashed as each chunk is written, and only once it matches
+/// is it renamed to where it belongs. So a reader of a file this store has placed sees an earlier file or the new
+/// one, whole, and never part of one. Two calls at once for the same file may both download it; the second rename
+/// replaces the first with the same bytes.
+/// </remarks>
+internal sealed class VerifiedFileStore
+{
+    /// <summary>
+    /// How much of a body each read takes, and so the most a download reads past a length it already exceeds.
+    /// <see cref="Stream.CopyToAsync(Stream)"/>'s own buffer size, beneath the large object heap's threshold.
+    /// </summary>
+    internal const int BufferSize = 81920;
+
+    private const string TemporaryExtension = ".tmp";
+
+    // Names the package's files among others in the system's temporary directory.
+    private const string ScratchPrefix = "quartercall-";
+
+    // An extension of letters and digits only is carried into a cached file's name.
+    private static readonly SearchValues<char> PlainExtension =
+        SearchValues.Create("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+    private readonly HostClient _host;
+    private readonly string? _cacheDirectory;
+
+    // What of a download differs from the manifest.
+    private enum Measure
+    {
+        Length,
+        Digest,
+    }
+
+    /// <summary>Creates a store that downloads from <paramref name="host"/>.</summary>
+    /// <param name="host">The host the files are on.</param>
+    /// <param name="cacheDirectory">Where to keep verified files between reads, or null to keep none.</param>
+    public VerifiedFileStore(HostClient host, string? cacheDirectory)
+    {
+        _host = host;
+        _cacheDirectory = cacheDirectory;
+    }
+
+    /// <summary>
+    /// A verified copy of <paramref name="file"/> to read: the cached one when it still matches, or else one just
+    /// downloaded, into the cache when there is one and into the system's temporary directory when not.
+    /// </summary>
+    /// <exception cref="DataIntegrityException">
+    /// The download does not match <paramref name="file"/>: its length or its digest differs, or it broke off. The
+    /// store throws this exception for nothing else, so a caller may retry on it.
+    /// </exception>
+    /// <exception cref="HttpRequestException">The host answered with a status that is not success.</exception>
+    /// <exception cref="TaskCanceledException">
+    /// The timeout passed; a <see cref="TimeoutException"/> is inside.
+    /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled.</exception>
+    /// <exception cref="IOException">A file could not be written.</exception>
+    public async Task<VerifiedFile> FetchAsync(FileRef file, CancellationToken ct)
+    {
+        if (_cacheDirectory is null)
+        {
+            var name = $"{ScratchPrefix}{Guid.NewGuid():N}{Extension(file.Uri)}";
+            var scratch = Path.Combine(Path.GetTempPath(), name);
+            await DownloadAsync(file, scratch, ct).ConfigureAwait(false);
+            return new VerifiedFile(scratch, FileKeeper.None);
+        }
+
+        Directory.CreateDirectory(_cacheDirectory);
+        var cached = Path.Combine(_cacheDirectory, file.Sha256 + Extension(file.Uri));
+        if (!await IsWholeAsync(cached, file, ct).ConfigureAwait(false))
+        {
+            await DownloadOverAsync(file, cached, ct).ConfigureAwait(false);
+        }
+
+        return new VerifiedFile(cached, FileKeeper.Cache);
+    }
+
+    /// <summary>
+    /// Saves a verified copy of <paramref name="file"/> at <paramref name="path"/>, creating its directory if
+    /// missing. A file already there is replaced only by one that matches.
+    /// </summary>
+    /// <exception cref="DataIntegrityException">
+    /// The download does not match <paramref name="file"/>, as for <see cref="FetchAsync"/>.
+    /// </exception>
+    /// <exception cref="HttpRequestException">The host answered with a status that is not success.</exception>
+    /// <exception cref="TaskCanceledException">
+    /// The timeout passed; a <see cref="TimeoutException"/> is inside.
+    /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled.</exception>
+    /// <exception cref="IOException">A file could not be written.</exception>
+    public async Task SaveAsync(FileRef file, string path, CancellationToken ct)
+    {
+        var target = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        if (_cacheDirectory is null)
+        {
+            await DownloadOverAsync(file, target, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var cached = await FetchAsync(file, ct).ConfigureAwait(false);
+        await using (cached.ConfigureAwait(false))
+        {
+            await CopyOverAsync(cached.Path, target, file, ct).ConfigureAwait(false);
+        }
+    }
+
+    // A cached file's name carries the extension of the URL's file name, ".parquet" for every file today.
+    private static string Extension(Uri uri)
+    {
+        var extension = Path.GetExtension(uri.AbsolutePath);
+        // Anything but letters and digits could mean something else to a file system, such as a stream on NTFS.
+        var plain = extension.Length > 1 && !extension.AsSpan(1).ContainsAnyExcept(PlainExtension);
+        return plain ? extension : string.Empty;
+    }
+
+    // A temporary file beside target, named so that no other call's can be the same.
+    private static string Beside(string target)
+    {
+        return $"{target}.{Guid.NewGuid():N}{TemporaryExtension}";
+    }
+
+    // Whether the file at path is there and matches: its length first, and then its digest. A file that cannot be
+    // opened, or is not there, does not match.
+    private static async Task<bool> IsWholeAsync(string path, FileRef file, CancellationToken ct)
+    {
+        FileStream stream;
+        try
+        {
+            stream = VerifiedFile.OpenShared(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        await using (stream.ConfigureAwait(false))
+        {
+            if (stream.Length != file.Bytes)
+            {
+                return false;
+            }
+
+            var digest = new byte[SHA256.HashSizeInBytes];
+            await SHA256.HashDataAsync(stream, digest, ct).ConfigureAwait(false);
+            return file.HasDigest(digest);
+        }
+    }
+
+    // Moves the verified temporary file over target.
+    private static async Task PlaceAsync(string temporary, string target, FileRef file, CancellationToken ct)
+    {
+        try
+        {
+            File.Move(temporary, target, overwrite: true);
+            return;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Windows refuses to replace a file another reader holds open. If that file already matches, it serves.
+            bool whole;
+            try
+            {
+                whole = await IsWholeAsync(target, file, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                File.Delete(temporary);
+            }
+
+            if (!whole)
+            {
+                throw;
+            }
+        }
+    }
+
+    private static async Task CopyOverAsync(string source, string target, FileRef file, CancellationToken ct)
+    {
+        var temporary = Beside(target);
+        try
+        {
+            var input = VerifiedFile.OpenShared(source);
+            await using (input.ConfigureAwait(false))
+            {
+                var output = CreateNew(temporary);
+                await using (output.ConfigureAwait(false))
+                {
+                    await input.CopyToAsync(output, BufferSize, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        catch
+        {
+            File.Delete(temporary);
+            throw;
+        }
+
+        await PlaceAsync(temporary, target, file, ct).ConfigureAwait(false);
+    }
+
+    private static FileStream CreateNew(string path)
+    {
+        return new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.Asynchronous,
+        });
+    }
+
+    private static async Task<long> WriteVerifiedAsync(
+        HttpResponseMessage response, FileRef file, string destination, CancellationToken ct)
+    {
+        var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        await using (body.ConfigureAwait(false))
+        {
+            var output = CreateNew(destination);
+            await using (output.ConfigureAwait(false))
+            {
+                return await CopyVerifiedAsync(body, output, file, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    // Reads the body in one pass: each chunk goes to output and to the hash. Reading stops at the first byte past
+    // the declared length, so a body that is too long costs at most one byte more than the file.
+    private static async Task<long> CopyVerifiedAsync(Stream body, Stream output, FileRef file, CancellationToken ct)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        try
+        {
+            long total = 0;
+            while (true)
+            {
+                var remaining = file.Bytes - total;
+                var wanted = remaining < BufferSize ? (int)remaining + 1 : BufferSize;
+                var read = await ReadBodyAsync(body, buffer.AsMemory(0, wanted), file, total, ct)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                total += read;
+                if (total > file.Bytes)
+                {
+                    var detail = Invariant($"it holds more than the {file.Bytes} bytes the manifest names");
+                    throw Mismatch(file, Measure.Length, detail);
+                }
+
+                await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                hash.AppendData(buffer.AsSpan(0, read));
+            }
+
+            if (total < file.Bytes)
+            {
+                var detail = Invariant($"it ended after {total} of the {file.Bytes} bytes the manifest names");
+                throw Mismatch(file, Measure.Length, detail);
+            }
+
+            if (!HasDigest(hash, file))
+            {
+                throw Mismatch(file, Measure.Digest, $"the manifest names {file.Sha256}");
+            }
+
+            return total;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static async ValueTask<int> ReadBodyAsync(
+        Stream body, Memory<byte> buffer, FileRef file, long total, CancellationToken ct)
+    {
+        try
+        {
+            return await body.ReadAsync(buffer, ct).ConfigureAwait(false);
+        }
+        catch (IOException e)
+        {
+            // A read cut short by a cancellation, the caller's or the timeout's, is that cancellation.
+            ct.ThrowIfCancellationRequested();
+            // A dropped connection is a short download.
+            var detail = Invariant(
+                $"the download broke off after {total} of the {file.Bytes} bytes the manifest names");
+            throw Mismatch(file, Measure.Length, detail, e);
+        }
+    }
+
+    private static bool HasDigest(IncrementalHash hash, FileRef file)
+    {
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        hash.GetHashAndReset(digest);
+        return file.HasDigest(digest);
+    }
+
+    private static DataIntegrityException Mismatch(
+        FileRef file, Measure differs, string detail, IOException? inner = null)
+    {
+        var measure = differs == Measure.Length ? "length" : "SHA-256 digest";
+        var message = $"The file at {file.Uri} does not match the manifest: its {measure} differs ({detail}). "
+            + "The quarter may be being republished; try again shortly.";
+        return inner is null ? new DataIntegrityException(message) : new DataIntegrityException(message, inner);
+    }
+
+    // Downloads file into a temporary file beside target, then moves it over target once it matches.
+    private async Task DownloadOverAsync(FileRef file, string target, CancellationToken ct)
+    {
+        var temporary = Beside(target);
+        await DownloadAsync(file, temporary, ct).ConfigureAwait(false);
+        await PlaceAsync(temporary, target, file, ct).ConfigureAwait(false);
+    }
+
+    // Downloads file to destination, verified. A failed or cancelled download leaves nothing at destination.
+    private async Task DownloadAsync(FileRef file, string destination, CancellationToken ct)
+    {
+        try
+        {
+            await _host
+                .ReadAsync(file.Uri, (response, token) => WriteVerifiedAsync(response, file, destination, token), ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            File.Delete(destination);
+            throw;
+        }
+    }
+}

@@ -35,7 +35,7 @@ public sealed class QuarterCallClient : IDisposable
     {
         Validate(options);
         _ownedHttp = CreateHttpClient();
-        Data = new DataClient(CreateHost(_ownedHttp, options));
+        Data = new DataClient(CreateHost(_ownedHttp, options), options.CacheDirectory);
     }
 
     /// <summary>
@@ -54,7 +54,7 @@ public sealed class QuarterCallClient : IDisposable
         ArgumentNullException.ThrowIfNull(httpClient);
         options ??= new QuarterCallOptions();
         Validate(options);
-        Data = new DataClient(CreateHost(httpClient, options));
+        Data = new DataClient(CreateHost(httpClient, options), options.CacheDirectory);
     }
 
     /// <summary>The evidence: the filings as the data host publishes them.</summary>
