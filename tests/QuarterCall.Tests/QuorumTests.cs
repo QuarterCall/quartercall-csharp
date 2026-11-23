@@ -120,6 +120,101 @@ public class QuorumTests
     }
 
     [Fact]
+    public async Task MapsEachTermToItsOwnMember()
+    {
+        var quorum = JsonNode.Parse("""
+            {
+              "measurement": "m/9",
+              "measured_at": "2026-01-02T03:04:05Z",
+              "due_date": "2026-02-03",
+              "expected_basis": "partial",
+              "weights_from": "2025Q4",
+              "expected": 101,
+              "filed": 102,
+              "filed_unweighted": 103,
+              "filed_by_charter": 104,
+              "outstanding_count": 105,
+              "excused": 106,
+              "assets_expected": 2000000000001,
+              "assets_filed": 2000000000002,
+              "largest_outstanding_assets": 2000000000003,
+              "coverage": {
+                "by_count": 0.11,
+                "by_assets": 0.22,
+                "by_assets_ceiling": 0.33,
+                "ceiling_basis": "basis-text",
+                "largest_outstanding_share": 0.44
+              },
+              "verdicts": {
+                "alpha/1": {
+                  "status": "reached",
+                  "reached_at": "2026-03-04T05:06:07Z",
+                  "reached_at_basis": "observed-text"
+                },
+                "beta/2": {
+                  "status": "below",
+                  "below_since": "2026-04-05T06:07:08Z"
+                }
+              },
+              "materiality": 0.55,
+              "outstanding_material": [
+                { "cuid": 11, "cu_number": 12, "name": "First", "last_known_assets": 31, "share": 0.61 },
+                { "cuid": 21, "cu_number": 22, "name": "Second", "last_known_assets": 32, "share": 0.62 }
+              ],
+              "detail_path": "detail/path.parquet",
+              "detail_sha256": "abc123",
+              "detail_bytes": 777
+            }
+            """)!.AsObject();
+
+        var read = await ReadQuorumAsync(quorum);
+
+        Assert.Equal("m/9", read.Measurement);
+        Assert.Equal(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), read.MeasuredAt);
+        Assert.Equal(new DateOnly(2026, 2, 3), read.DueDate);
+        Assert.Equal("partial", read.ExpectedBasis);
+        Assert.Equal(Quarter.Parse("2025Q4"), read.WeightsFrom);
+        Assert.Equal(101, read.Expected);
+        Assert.Equal(102, read.Filed);
+        Assert.Equal(103, read.FiledUnweighted);
+        Assert.Equal(104, read.FiledByCharter);
+        Assert.Equal(105, read.OutstandingCount);
+        Assert.Equal(106, read.Excused);
+        Assert.Equal(2000000000001L, read.AssetsExpected);
+        Assert.Equal(2000000000002L, read.AssetsFiled);
+        Assert.Equal(2000000000003L, read.LargestOutstandingAssets);
+        Assert.Equal(0.11m, read.CoverageByCount);
+        Assert.Equal(0.22m, read.CoverageByAssets);
+        Assert.Equal(0.33m, read.CoverageByAssetsCeiling);
+        Assert.Equal("basis-text", read.CoverageCeilingBasis);
+        Assert.Equal(0.44m, read.CoverageLargestOutstandingShare);
+        Assert.Equal(0.55m, read.Materiality);
+        Assert.Equal("detail/path.parquet", read.DetailPath);
+        Assert.Equal("abc123", read.DetailSha256);
+        Assert.Equal(777L, read.DetailBytes);
+
+        Assert.Equal(2, read.Verdicts.Count);
+        var alpha = read.Verdicts["alpha/1"];
+        Assert.Equal(QuorumStatus.Reached, alpha.Status);
+        Assert.Equal(new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.Zero), alpha.ReachedAt);
+        Assert.Equal("observed-text", alpha.ReachedAtBasis);
+        Assert.Null(alpha.BelowSince);
+        var beta = read.Verdicts["beta/2"];
+        Assert.Equal(QuorumStatus.Below, beta.Status);
+        Assert.Equal(new DateTimeOffset(2026, 4, 5, 6, 7, 8, TimeSpan.Zero), beta.BelowSince);
+        Assert.Null(beta.ReachedAt);
+        Assert.Null(beta.ReachedAtBasis);
+        Assert.True(read.HasReached("alpha/1"));
+        Assert.False(read.HasReached("beta/2"));
+
+        Assert.Equal(2, read.OutstandingMaterial.Count);
+        var first = read.OutstandingMaterial[0];
+        Assert.Equal((11, 12, "First", 31L, 0.61m), (first.Cuid, first.CuNumber, first.Name, first.LastKnownAssets, first.Share));
+        var second = read.OutstandingMaterial[1];
+        Assert.Equal((21, 22, "Second", 32L, 0.62m), (second.Cuid, second.CuNumber, second.Name, second.LastKnownAssets, second.Share));
+    }
+
+    [Fact]
     public async Task ReadsEveryTimeAsUtc()
     {
         var quorum = Published();
