@@ -108,7 +108,7 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
         Print($"2026Q3 text rows: {textRows}");
         Print($"2026Q3 profile rows: {profiles.Count}; manifest ProfileRows: {manifest.ProfileRows}");
         Print($"2026Q3 columns on a profile: {profiles[0].Columns.Count}");
-        Print($"2026Q3 bytes held with every profile in a list: {held}; per profile: {held / (double)profiles.Count:F1}");
+        Print($"2026Q3 bytes the whole process holds after a full collection, every profile in a list: {held}; that divided by the profile count: {held / (double)profiles.Count:F1}");
 
         string directory = Path.Combine(cache.Directory, "saved");
         var quorum = await qc.Data.DownloadAsync(quarter, EvidenceTable.Quorum, Path.Combine(directory, "quorum.parquet"));
@@ -122,6 +122,54 @@ public class LiveTests(ITestOutputHelper output, LiveCache cache) : IClassFixtur
         Assert.Equal(manifest.ProfileRows, profiles.Count);
         Assert.Equal(manifest.Quorum!.DetailBytes, quorumBytes);
         Assert.Equal(index.Bytes, indexBytes);
+    }
+
+    [LiveFact]
+    public async Task ReadsAFilterAfterAnotherRead()
+    {
+        using var qc = NewClient();
+        var quarter = Quarter.Parse("2026Q3");
+        var first = new AccountFilter { Codes = ["A010"] };
+        var second = new AccountFilter { CuNumbers = [5536], Codes = ["A010", "A018"] };
+
+        // The README's first example, then its second, three times over in one process.
+        var rounds = new List<List<Account>>();
+        for (int round = 0; round < 3; round++)
+        {
+            var five = new List<Account>();
+            await foreach (Account a in qc.Data.ReadAccountsAsync(quarter, first).Take(5))
+            {
+                five.Add(a);
+            }
+
+            Assert.Equal(5, five.Count);
+            Assert.All(five, a => Assert.Equal("A010", a.AccountCode));
+
+            var rows = new List<Account>();
+            await foreach (Account a in qc.Data.ReadAccountsAsync(quarter, second))
+            {
+                rows.Add(a);
+            }
+
+            rounds.Add(rows);
+        }
+
+        // The same rows, kept from a pass that reads every row.
+        var expected = new List<Account>();
+        await foreach (Account a in qc.Data.ReadAccountsAsync(quarter))
+        {
+            if (a.CuNumber == 5536 && a.AccountCode is "A010" or "A018")
+            {
+                expected.Add(a);
+            }
+        }
+
+        Print($"2026Q3 rows of charter 5536 with A010 or A018: {expected.Count}");
+        Assert.NotEmpty(expected);
+        for (int round = 0; round < rounds.Count; round++)
+        {
+            Assert.True(expected.SequenceEqual(rounds[round]), $"round {round}: the filtered rows differ");
+        }
     }
 
     [LiveFact]
