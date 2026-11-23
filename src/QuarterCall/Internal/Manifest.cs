@@ -85,6 +85,133 @@ internal sealed record ManifestQuarter
 
     [JsonPropertyName("updated_at")]
     public DateTimeOffset? UpdatedAt { get; init; }
+
+    [JsonPropertyName("quorum")]
+    public ManifestQuorum? Quorum { get; init; }
+}
+
+/// <summary>A quarter's <c>quorum</c> object, its members as published.</summary>
+internal sealed record ManifestQuorum
+{
+    [JsonPropertyName("measurement")]
+    public string? Measurement { get; init; }
+
+    [JsonPropertyName("measured_at")]
+    public DateTimeOffset? MeasuredAt { get; init; }
+
+    [JsonPropertyName("due_date")]
+    public DateOnly? DueDate { get; init; }
+
+    [JsonPropertyName("expected_basis")]
+    public string? ExpectedBasis { get; init; }
+
+    [JsonPropertyName("weights_from")]
+    public Quarter? WeightsFrom { get; init; }
+
+    [JsonPropertyName("expected")]
+    public int? Expected { get; init; }
+
+    [JsonPropertyName("filed")]
+    public int? Filed { get; init; }
+
+    [JsonPropertyName("filed_unweighted")]
+    public int? FiledUnweighted { get; init; }
+
+    [JsonPropertyName("filed_by_charter")]
+    public int? FiledByCharter { get; init; }
+
+    [JsonPropertyName("outstanding_count")]
+    public int? OutstandingCount { get; init; }
+
+    [JsonPropertyName("excused")]
+    public int? Excused { get; init; }
+
+    [JsonPropertyName("assets_expected")]
+    public long? AssetsExpected { get; init; }
+
+    [JsonPropertyName("assets_filed")]
+    public long? AssetsFiled { get; init; }
+
+    [JsonPropertyName("largest_outstanding_assets")]
+    public long? LargestOutstandingAssets { get; init; }
+
+    [JsonPropertyName("coverage")]
+    public ManifestCoverage? Coverage { get; init; }
+
+    // Set accessors on the two collections: with init, the generated reader replaced the initialiser with null
+    // for an absent key.
+    [JsonPropertyName("verdicts")]
+    public IReadOnlyDictionary<string, ManifestVerdict?> Verdicts { get; set; } =
+        new Dictionary<string, ManifestVerdict?>();
+
+    [JsonPropertyName("materiality")]
+    public decimal? Materiality { get; init; }
+
+    [JsonPropertyName("outstanding_material")]
+    public IReadOnlyList<ManifestOutstandingFiler?> OutstandingMaterial { get; set; } = [];
+
+    [JsonPropertyName("detail_path")]
+    public string? DetailPath { get; init; }
+
+    [JsonPropertyName("detail_sha256")]
+    public string? DetailSha256 { get; init; }
+
+    [JsonPropertyName("detail_bytes")]
+    public long? DetailBytes { get; init; }
+}
+
+/// <summary>A quorum's <c>coverage</c> object.</summary>
+internal sealed record ManifestCoverage
+{
+    [JsonPropertyName("by_count")]
+    public decimal? ByCount { get; init; }
+
+    [JsonPropertyName("by_assets")]
+    public decimal? ByAssets { get; init; }
+
+    [JsonPropertyName("by_assets_ceiling")]
+    public decimal? ByAssetsCeiling { get; init; }
+
+    [JsonPropertyName("largest_outstanding_share")]
+    public decimal? LargestOutstandingShare { get; init; }
+
+    [JsonPropertyName("ceiling_basis")]
+    public string? CeilingBasis { get; init; }
+}
+
+/// <summary>An entry of a quorum's <c>verdicts</c>. Its status is text, so one not known is read, not refused.</summary>
+internal sealed record ManifestVerdict
+{
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+
+    [JsonPropertyName("reached_at")]
+    public DateTimeOffset? ReachedAt { get; init; }
+
+    [JsonPropertyName("reached_at_basis")]
+    public string? ReachedAtBasis { get; init; }
+
+    [JsonPropertyName("below_since")]
+    public DateTimeOffset? BelowSince { get; init; }
+}
+
+/// <summary>An entry of a quorum's <c>outstanding_material</c>.</summary>
+internal sealed record ManifestOutstandingFiler
+{
+    [JsonPropertyName("cuid")]
+    public int? Cuid { get; init; }
+
+    [JsonPropertyName("cu_number")]
+    public int? CuNumber { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("last_known_assets")]
+    public long? LastKnownAssets { get; init; }
+
+    [JsonPropertyName("share")]
+    public decimal? Share { get; init; }
 }
 
 /// <summary>The manifest's <c>index</c> object: the file that indexes every filing.</summary>

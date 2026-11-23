@@ -72,4 +72,9 @@ public sealed record PublishedQuarter
 
     /// <summary>When the quarter's files were last built, in UTC, <c>updated_at</c>.</summary>
     public DateTimeOffset? UpdatedAt { get; init; }
+
+    /// <summary>
+    /// How much of the system has filed for the quarter, <c>quorum</c>; null when the manifest gives none.
+    /// </summary>
+    public FilingQuorum? Quorum { get; init; }
 }

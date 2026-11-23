@@ -62,7 +62,7 @@ internal sealed class ManifestReader
 
             if (entry.AccountsPath is not null)
             {
-                quarters.Add(Publish(entry, entry.AccountsPath));
+                quarters.Add(Publish(entry, entry.AccountsPath, uri));
             }
         }
 
@@ -93,7 +93,7 @@ internal sealed class ManifestReader
         return inner is null ? new DataIntegrityException(message) : new DataIntegrityException(message, inner);
     }
 
-    private static PublishedQuarter Publish(ManifestQuarter entry, string accountsPath)
+    private static PublishedQuarter Publish(ManifestQuarter entry, string accountsPath, Uri uri)
     {
         return new PublishedQuarter
         {
@@ -117,6 +117,82 @@ internal sealed class ManifestReader
             ProfileRows = entry.ProfileRows,
             ProfilesMissing = entry.ProfilesMissing,
             UpdatedAt = entry.UpdatedAt,
+            Quorum = entry.Quorum is null ? null : PublishQuorum(entry.Quorum, uri),
+        };
+    }
+
+    private static FilingQuorum PublishQuorum(ManifestQuorum quorum, Uri uri)
+    {
+        var verdicts = new Dictionary<string, QuorumVerdict>(quorum.Verdicts.Count);
+        foreach (var (policy, verdict) in quorum.Verdicts)
+        {
+            verdicts[policy] = PublishVerdict(verdict ?? throw Malformed(uri, inner: null));
+        }
+
+        var outstanding = new List<OutstandingFiler>(quorum.OutstandingMaterial.Count);
+        foreach (var filer in quorum.OutstandingMaterial)
+        {
+            outstanding.Add(PublishFiler(filer ?? throw Malformed(uri, inner: null)));
+        }
+
+        var coverage = quorum.Coverage;
+        return new FilingQuorum
+        {
+            Measurement = quorum.Measurement,
+            MeasuredAt = quorum.MeasuredAt,
+            DueDate = quorum.DueDate,
+            ExpectedBasis = quorum.ExpectedBasis,
+            WeightsFrom = quorum.WeightsFrom,
+            Expected = quorum.Expected,
+            Filed = quorum.Filed,
+            FiledUnweighted = quorum.FiledUnweighted,
+            FiledByCharter = quorum.FiledByCharter,
+            OutstandingCount = quorum.OutstandingCount,
+            Excused = quorum.Excused,
+            AssetsExpected = quorum.AssetsExpected,
+            AssetsFiled = quorum.AssetsFiled,
+            LargestOutstandingAssets = quorum.LargestOutstandingAssets,
+            CoverageByCount = coverage?.ByCount,
+            CoverageByAssets = coverage?.ByAssets,
+            CoverageByAssetsCeiling = coverage?.ByAssetsCeiling,
+            CoverageLargestOutstandingShare = coverage?.LargestOutstandingShare,
+            CoverageCeilingBasis = coverage?.CeilingBasis,
+            Materiality = quorum.Materiality,
+            DetailPath = quorum.DetailPath,
+            DetailSha256 = quorum.DetailSha256,
+            DetailBytes = quorum.DetailBytes,
+            Verdicts = verdicts.AsReadOnly(),
+            OutstandingMaterial = outstanding.AsReadOnly(),
+        };
+    }
+
+    // The host's word is passed on: the status is matched to a name, never worked out from the counts.
+    private static QuorumVerdict PublishVerdict(ManifestVerdict verdict)
+    {
+        return new QuorumVerdict
+        {
+            Status = verdict.Status switch
+            {
+                "reached" => QuorumStatus.Reached,
+                "below" => QuorumStatus.Below,
+                "indeterminate" => QuorumStatus.Indeterminate,
+                _ => QuorumStatus.Unknown,
+            },
+            ReachedAt = verdict.ReachedAt,
+            ReachedAtBasis = verdict.ReachedAtBasis,
+            BelowSince = verdict.BelowSince,
+        };
+    }
+
+    private static OutstandingFiler PublishFiler(ManifestOutstandingFiler filer)
+    {
+        return new OutstandingFiler
+        {
+            Cuid = filer.Cuid,
+            CuNumber = filer.CuNumber,
+            Name = filer.Name,
+            LastKnownAssets = filer.LastKnownAssets,
+            Share = filer.Share,
         };
     }
 }
